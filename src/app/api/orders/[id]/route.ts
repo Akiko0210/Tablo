@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/current";
+import { getStaffContext } from "@/lib/auth/current";
 import { updateOrderStatus } from "@/lib/orders/store";
 import { ORDER_STATUSES, type OrderStatus } from "@/lib/orders/types";
 
-// PATCH /api/orders/[id] — staff only. Advance an order's status.
+// PATCH /api/orders/[id] — staff only. Advance an order's status. Scoped to
+// the signed-in restaurant, so one tenant can't touch another's orders.
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const session = await getSession();
-  if (!session) {
+  const ctx = await getStaffContext();
+  if (!ctx) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -30,7 +31,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid status" }, { status: 400 });
   }
 
-  const order = updateOrderStatus(id, status as OrderStatus);
+  const order = updateOrderStatus(ctx.restaurant.id, id, status as OrderStatus);
   if (!order) {
     return NextResponse.json({ error: "Order not found" }, { status: 404 });
   }

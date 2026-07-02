@@ -5,6 +5,11 @@ import { toast } from "sonner";
 import type { MenuItem } from "@/lib/types";
 import { cartSubtotal } from "@/lib/cart";
 import { CartProvider, useCart } from "./cart-context";
+import {
+  RestaurantProvider,
+  useRestaurant,
+  type GuestRestaurant,
+} from "./restaurant-context";
 import { BrowseScreen } from "./browse-screen";
 import { ItemDetailSheet } from "./item-detail-sheet";
 import { OrderBar } from "./order-bar";
@@ -14,6 +19,7 @@ import { SentScreen, type SentOrder } from "./sent-screen";
 type Screen = "browse" | "review" | "sent";
 
 function MenuFlow({ tableId }: { tableId: string }) {
+  const restaurant = useRestaurant();
   const { lines, clear } = useCart();
   const [screen, setScreen] = React.useState<Screen>("browse");
   const [activeItem, setActiveItem] = React.useState<MenuItem | null>(null);
@@ -30,7 +36,9 @@ function MenuFlow({ tableId }: { tableId: string }) {
     const snapshotLines = [...lines];
     const subtotal = cartSubtotal(snapshotLines);
     try {
-      const res = await fetch("/api/orders", {
+      const res = await fetch(
+        `/api/orders?restaurant=${encodeURIComponent(restaurant.slug)}`,
+        {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -112,14 +120,22 @@ function scrollTop() {
   if (typeof window !== "undefined") window.scrollTo({ top: 0 });
 }
 
-/** Full customer menu experience for a table, mounted at /m/[table]. */
-export function MenuApp({ tableId }: { tableId: string }) {
+/** Full customer menu experience for a table, mounted at /m/[restaurant]/[table]. */
+export function MenuApp({
+  tableId,
+  restaurant,
+}: {
+  tableId: string;
+  restaurant: GuestRestaurant;
+}) {
   return (
     <div className="flex min-h-dvh justify-center bg-background">
       <div className="relative flex min-h-dvh w-full max-w-[480px] flex-col bg-card sm:border-x sm:border-border sm:shadow-sm">
-        <CartProvider>
-          <MenuFlow tableId={tableId} />
-        </CartProvider>
+        <RestaurantProvider restaurant={restaurant}>
+          <CartProvider>
+            <MenuFlow tableId={tableId} />
+          </CartProvider>
+        </RestaurantProvider>
       </div>
     </div>
   );

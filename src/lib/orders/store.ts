@@ -1,14 +1,18 @@
-// In-memory order store. Persists for the lifetime of the server process, which
-// is enough for the demo: guests POST orders and the dashboard reads them live.
-// Swap the internals for SQLite/Postgres later without changing callers.
+// In-memory order store, scoped per restaurant. Persists for the lifetime of
+// the server process, which is enough for the demo: guests POST orders and the
+// dashboard reads them live. Swap the internals for SQLite/Postgres later
+// without changing callers.
 //
 // Attached to globalThis so it survives dev HMR module reloads.
 
+import { DEMO_RESTAURANT_ID } from "@/lib/restaurants/store";
 import type { NewOrderInput, Order, OrderStatus } from "./types";
 
 interface OrderStore {
   orders: Order[];
   seq: number;
+  /** Restaurants whose synthetic analysis history has been generated. */
+  historySeeded: Set<string>;
 }
 
 const globalForStore = globalThis as unknown as {
@@ -17,12 +21,17 @@ const globalForStore = globalThis as unknown as {
 
 function seed(): OrderStore {
   const now = Date.now();
-  const store: OrderStore = { orders: [], seq: 0 };
+  const store: OrderStore = {
+    orders: [],
+    seq: 0,
+    historySeeded: new Set(),
+  };
   // A couple of orders already "in the kitchen" so the dashboard isn't empty
   // the first time it's opened.
   store.orders.push(
     {
       id: "ord-1001",
+      restaurantId: DEMO_RESTAURANT_ID,
       table: "4",
       lines: [
         {
@@ -40,6 +49,7 @@ function seed(): OrderStore {
     },
     {
       id: "ord-1002",
+      restaurantId: DEMO_RESTAURANT_ID,
       table: "9",
       lines: [
         {
@@ -67,18 +77,24 @@ function getStore(): OrderStore {
   return globalForStore.__tabloOrderStore;
 }
 
-/** All orders, newest first. */
-export function listOrders(): Order[] {
-  return [...getStore().orders].sort((a, b) =>
-    b.createdAt.localeCompare(a.createdAt),
-  );
+/** Live (non-seeded) orders for one restaurant, newest first. */
+export function listOrders(restaurantId: string): Order[] {
+  return getStore()
+    .orders.filter((o) => o.restaurantId === restaurantId && !o.seeded)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export function createOrder(input: NewOrderInput): Order {
+/** Every order for a restaurant including synthetic history — analysis only. */
+export function listAllOrdersForAnalysis(restaurantId: string): Order[] {
+  return getStore().orders.filter((o) => o.restaurantId === restaurantId);
+}
+
+export function createOrder(restaurantId: string, input: NewOrderInput): Order {
   const store = getStore();
   store.seq += 1;
   const order: Order = {
     id: `ord-${store.seq}`,
+    restaurantId,
     table: input.table,
     lines: input.lines,
     subtotal: input.subtotal,
@@ -90,12 +106,32 @@ export function createOrder(input: NewOrderInput): Order {
   return order;
 }
 
+/** Advance an order's status. The restaurantId guard prevents one tenant from
+ * touching another tenant's orders. */
 export function updateOrderStatus(
+  restaurantId: string,
   id: string,
   status: OrderStatus,
 ): Order | undefined {
-  const order = getStore().orders.find((o) => o.id === id);
+  const order = getStore().orders.find(
+    (o) => o.id === id && o.restaurantId === restaurantId,
+  );
   if (!order) return undefined;
   order.status = status;
   return order;
+}
+
+/** Bulk-insert synthetic history (used by the analysis seeder). Idempotent per
+ * restaurant: the second call is a no-op. Returns whether seeding ran. */
+export function insertSeededHistory(
+  restaurantId: string,
+  orders: Omit<Order, "seeded">[],
+): boolean {
+  const store = getStore();
+  if (store.historySeeded.has(restaurantId)) return false;
+  store.historySeeded.add(restaurantId);
+  for (const order of orders) {
+    store.orders.push({ ...order, seeded: true });
+  }
+  return true;
 }

@@ -7,8 +7,10 @@ import {
   ClipboardList,
   UtensilsCrossed,
   LineChart,
+  QrCode,
+  Users,
+  Settings,
   Boxes,
-  Wallet,
   Phone,
   type LucideIcon,
 } from "lucide-react";
@@ -26,10 +28,12 @@ interface NavItem {
 export const NAV: NavItem[] = [
   { label: "Overview", href: "/dashboard", icon: LayoutGrid },
   { label: "Orders", href: "/dashboard/orders", icon: ClipboardList },
-  { label: "Menu", href: "#", icon: UtensilsCrossed, soon: true },
-  { label: "Analysis", href: "#", icon: LineChart, soon: true },
+  { label: "Menu", href: "/dashboard/menu", icon: UtensilsCrossed },
+  { label: "Analysis", href: "/dashboard/analysis", icon: LineChart },
+  { label: "QR codes", href: "/dashboard/qr", icon: QrCode },
+  { label: "Team", href: "/dashboard/team", icon: Users },
+  { label: "Settings", href: "/dashboard/settings", icon: Settings },
   { label: "Supplies", href: "#", icon: Boxes, soon: true },
-  { label: "Accounts", href: "#", icon: Wallet, soon: true },
   { label: "Voice", href: "#", icon: Phone, soon: true },
 ];
 

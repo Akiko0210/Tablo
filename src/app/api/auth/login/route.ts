@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyCredentials } from "@/lib/auth/users";
+import { verifyCredentialsAny } from "@/lib/auth/directory";
 import {
   SESSION_COOKIE,
   signSession,
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const user = verifyCredentials(email, password);
+  const user = await verifyCredentialsAny(email, password);
   if (!user) {
     return NextResponse.json(
       { error: "Incorrect email or password" },

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth/current";
-import { findUserById } from "@/lib/auth/users";
+import { findUserByIdAny } from "@/lib/auth/directory";
+import { initialsFrom } from "@/lib/auth/initials";
 import {
   DashboardSidebar,
   DashboardMobileNav,
@@ -14,16 +15,9 @@ export default async function DashboardLayout({
   const session = await getSession();
   if (!session) redirect("/login");
 
-  const user = findUserById(session.userId);
+  const user = findUserByIdAny(session.userId);
   const name = user?.name ?? session.name;
-  const initials =
-    user?.initials ??
-    name
-      .split(" ")
-      .map((p) => p[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase();
+  const initials = user?.initials ?? initialsFrom(name);
   const restaurantName = user?.restaurantName ?? "Your restaurant";
 
   return (

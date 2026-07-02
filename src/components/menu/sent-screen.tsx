@@ -8,7 +8,7 @@ import { formatMoney } from "@/lib/format";
 import { cartItemCount } from "@/lib/cart";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { restaurant } from "@/lib/menu-data";
+import { useRestaurant } from "./restaurant-context";
 
 export interface SentOrder {
   lines: CartLine[];
@@ -26,6 +26,7 @@ export function SentScreen({
   order: SentOrder;
   onNewOrder: () => void;
 }) {
+  const restaurant = useRestaurant();
   const [rating, setRating] = React.useState(0);
   const [hover, setHover] = React.useState(0);
   const [chips, setChips] = React.useState<string[]>([]);

@@ -22,6 +22,8 @@ export interface OrderLine {
 
 export interface Order {
   id: string;
+  /** Tenancy: which restaurant this order belongs to. */
+  restaurantId: string;
   /** Table identifier the order came from (e.g. "7"). */
   table: string;
   lines: OrderLine[];
@@ -30,9 +32,13 @@ export interface Order {
   status: OrderStatus;
   /** ISO timestamp. */
   createdAt: string;
+  /** True for synthetic history generated for the analysis charts. Seeded
+   * orders are excluded from the live orders board. */
+  seeded?: boolean;
 }
 
-/** Shape the guest menu POSTs to create an order. */
+/** Shape the guest menu POSTs to create an order (restaurant resolved from the
+ * URL slug server-side, never trusted from the body). */
 export interface NewOrderInput {
   table: string;
   lines: OrderLine[];

@@ -3,10 +3,11 @@
 import * as React from "react";
 import { Search, X } from "lucide-react";
 import type { MenuItem } from "@/lib/types";
-import { restaurant, itemsForCategory, searchItems } from "@/lib/menu-data";
+import { itemsForCategory, searchItems } from "@/lib/menu/query";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { MenuItemRow } from "./menu-item-row";
+import { useRestaurant } from "./restaurant-context";
 
 export function BrowseScreen({
   tableId,
@@ -15,13 +16,16 @@ export function BrowseScreen({
   tableId: string;
   onSelectItem: (item: MenuItem) => void;
 }) {
-  const [category, setCategory] = React.useState(restaurant.categories[0].id);
+  const restaurant = useRestaurant();
+  const [category, setCategory] = React.useState(
+    restaurant.categories[0]?.id ?? "popular",
+  );
   const [query, setQuery] = React.useState("");
 
   const searching = query.trim().length > 0;
   const results: MenuItem[] = searching
-    ? searchItems(query)
-    : itemsForCategory(category);
+    ? searchItems(restaurant.items, query)
+    : itemsForCategory(restaurant.items, category);
 
   return (
     <div className="flex flex-col">

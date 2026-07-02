@@ -15,7 +15,7 @@ export function FinalCta() {
         </p>
         <div className="mt-8 flex flex-wrap justify-center gap-3">
           <ButtonLink
-            href="/login"
+            href="/signup"
             size="lg"
             className="h-12 rounded-xl px-7 text-[15px]"
           >

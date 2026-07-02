@@ -5,6 +5,7 @@ import Link from "next/link";
 import { QRCodeCanvas } from "qrcode.react";
 import { Download, ExternalLink, QrCode, ArrowLeft } from "lucide-react";
 import { restaurant } from "@/lib/menu-data";
+import { DEMO_RESTAURANT_SLUG } from "@/lib/restaurants/demo";
 import { tableMenuUrl, tableMenuPath } from "@/lib/menu-url";
 import { Button } from "@/components/ui/button";
 import { ButtonLink } from "@/components/ui/button-link";
@@ -78,7 +79,7 @@ export default function QrPage() {
 }
 
 function QrCard({ table, origin }: { table: number; origin: string }) {
-  const url = tableMenuUrl(origin, table);
+  const url = tableMenuUrl(origin, DEMO_RESTAURANT_SLUG, table);
   const wrapRef = React.useRef<HTMLDivElement>(null);
 
   function download() {
@@ -95,7 +96,7 @@ function QrCard({ table, origin }: { table: number; origin: string }) {
       <div className="flex w-full items-center justify-between">
         <span className="text-sm font-semibold">Table {table}</span>
         <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-          {tableMenuPath(table)}
+          {tableMenuPath(DEMO_RESTAURANT_SLUG, table)}
         </span>
       </div>
 
@@ -122,7 +123,11 @@ function QrCard({ table, origin }: { table: number; origin: string }) {
         <Button variant="outline" size="sm" className="flex-1" onClick={download}>
           <Download className="size-3.5" /> PNG
         </Button>
-        <ButtonLink href={tableMenuPath(table)} size="sm" className="flex-1">
+        <ButtonLink
+          href={tableMenuPath(DEMO_RESTAURANT_SLUG, table)}
+          size="sm"
+          className="flex-1"
+        >
           <ExternalLink className="size-3.5" /> Open
         </ButtonLink>
       </div>

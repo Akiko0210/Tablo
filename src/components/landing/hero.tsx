@@ -23,7 +23,7 @@ export function Hero() {
 
             <div className="mt-7 flex flex-wrap items-center gap-3">
               <ButtonLink
-                href="/login"
+                href="/signup"
                 size="lg"
                 className="h-12 rounded-xl px-6 text-[15px]"
               >

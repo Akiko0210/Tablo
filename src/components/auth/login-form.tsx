@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -94,6 +95,13 @@ export function LoginForm() {
       <p className="rounded-lg bg-muted px-3 py-2 text-center text-[12px] text-muted-foreground">
         Demo account · <span className="font-medium">sofia@bella.com</span> /{" "}
         <span className="font-medium">tablo123</span>
+      </p>
+
+      <p className="text-center text-[13px] text-muted-foreground">
+        New restaurant?{" "}
+        <Link href="/signup" className="font-medium text-foreground underline">
+          Create an account
+        </Link>
       </p>
     </form>
   );
