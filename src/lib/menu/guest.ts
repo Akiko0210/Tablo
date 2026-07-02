@@ -25,7 +25,7 @@ export function guestRestaurantForSlug(slug: string): GuestRestaurant | null {
       price: item.price,
       categoryId: item.categoryId,
       tags: item.tags,
-      emoji: item.emoji,
+      imageUrl: item.imageUrl,
       soldOut: item.soldOut,
       popular: item.popular,
       sizes: item.sizes,

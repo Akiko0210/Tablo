@@ -4,7 +4,7 @@
 // Same globalThis/HMR pattern as the other stores.
 
 import crypto from "node:crypto";
-import type { Category, MenuItem } from "@/lib/types";
+import type { AddOn, Category, MenuItem, SizeOption } from "@/lib/types";
 import { restaurant as demoMenu } from "@/lib/menu-data";
 import { DEMO_RESTAURANT_ID } from "@/lib/restaurants/store";
 import { slugify } from "@/lib/restaurants/slug";
@@ -93,8 +93,25 @@ export interface MenuItemInput {
   category: string;
   tags?: MenuItem["tags"];
   emoji?: string;
+  imageUrl?: string;
   popular?: boolean;
   soldOut?: boolean;
+  sizes?: SizeOption[];
+  addons?: AddOn[];
+}
+
+/** Ensure every size/add-on row carries a stable id — the dashboard editor may
+ * send new rows without one. Empty lists collapse to undefined so the guest
+ * item sheet hides the section entirely. */
+function withOptionIds<T extends { id: string }>(
+  list: T[] | undefined,
+  prefix: string,
+): T[] | undefined {
+  if (!list || list.length === 0) return undefined;
+  return list.map((option) => ({
+    ...option,
+    id: option.id?.trim() ? option.id : `${prefix}_${crypto.randomUUID().slice(0, 6)}`,
+  }));
 }
 
 export function addMenuItem(
@@ -112,8 +129,11 @@ export function addMenuItem(
     categoryId: slugify(input.category),
     tags: input.tags ?? [],
     emoji: input.emoji,
+    imageUrl: input.imageUrl,
     popular: input.popular,
     soldOut: input.soldOut,
+    sizes: withOptionIds(input.sizes, "sz"),
+    addons: withOptionIds(input.addons, "ad"),
     source,
     createdAt: new Date().toISOString(),
   };
@@ -129,6 +149,9 @@ export interface MenuItemPatch {
   soldOut?: boolean;
   popular?: boolean;
   emoji?: string;
+  imageUrl?: string;
+  sizes?: SizeOption[];
+  addons?: AddOn[];
 }
 
 export function updateMenuItem(
@@ -151,6 +174,11 @@ export function updateMenuItem(
   if (patch.soldOut !== undefined) record.soldOut = patch.soldOut;
   if (patch.popular !== undefined) record.popular = patch.popular;
   if (patch.emoji !== undefined) record.emoji = patch.emoji || undefined;
+  // Presence of the key (even undefined) means "set the photo" — an explicit
+  // undefined clears it.
+  if ("imageUrl" in patch) record.imageUrl = patch.imageUrl || undefined;
+  if (patch.sizes !== undefined) record.sizes = withOptionIds(patch.sizes, "sz");
+  if (patch.addons !== undefined) record.addons = withOptionIds(patch.addons, "ad");
   return record;
 }
 

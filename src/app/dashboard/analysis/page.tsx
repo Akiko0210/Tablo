@@ -15,18 +15,13 @@ import { ensureAnalysisHistory } from "@/lib/analysis/ensure-history";
 import {
   itemPerformance,
   ordersByHour,
-  periodSummary,
   revenueByDayOfWeek,
-  revenueByWeek,
 } from "@/lib/analysis/stats";
 import { buildInsights, type Insight } from "@/lib/analysis/insights";
+import type { SalesEvent } from "@/lib/analysis/series";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import {
-  DayOfWeekChart,
-  HourlyChart,
-  RevenueByWeekChart,
-} from "@/components/dashboard/analysis-charts";
+import { RevenueExplorer } from "@/components/dashboard/revenue-explorer";
 
 export const metadata: Metadata = { title: "Analysis — Tablo" };
 
@@ -44,11 +39,20 @@ export default async function AnalysisPage() {
   // aren't empty. No-op afterwards.
   ensureAnalysisHistory(restaurant.id);
 
+  // Server component rendered per request (force-dynamic), so reading the wall
+  // clock here is intentional — it anchors the explorer's "current" period.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
+
   const orders = listAllOrdersForAnalysis(restaurant.id);
   const menuItems = listMenuItems(restaurant.id);
 
-  const summary = periodSummary(orders, 7);
-  const weekly = revenueByWeek(orders, 8);
+  // Compact event list (served sales only) for the client-side explorer, which
+  // buckets it into whatever period/granularity the owner navigates to.
+  const events: SalesEvent[] = orders
+    .filter((o) => o.status === "served")
+    .map((o) => ({ t: new Date(o.createdAt).getTime(), revenue: o.subtotal }));
+
   const byDay = revenueByDayOfWeek(orders, WINDOW_DAYS);
   const byHour = ordersByHour(orders, WINDOW_DAYS);
   const items = itemPerformance(orders, WINDOW_DAYS);
@@ -60,7 +64,7 @@ export default async function AnalysisPage() {
     windowDays: WINDOW_DAYS,
   });
 
-  const hasData = orders.length > 0;
+  const hasData = events.length > 0;
 
   return (
     <div>
@@ -80,23 +84,10 @@ export default async function AnalysisPage() {
         </div>
       ) : (
         <>
-          {/* Headline numbers: last 7 days vs the 7 before */}
-          <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <StatCard
-              label="Revenue · 7 days"
-              value={formatMoney(summary.revenue)}
-              trendPct={summary.revenueTrendPct}
-            />
-            <StatCard
-              label="Orders · 7 days"
-              value={String(summary.orders)}
-              trendPct={summary.ordersTrendPct}
-            />
-            <StatCard
-              label="Avg order"
-              value={formatMoney(summary.avgOrder)}
-              trendPct={null}
-            />
+          {/* Unified revenue + orders explorer — one chart, navigable by
+              day / week / month / year. */}
+          <div className="mt-6">
+            <RevenueExplorer events={events} nowMs={nowMs} />
           </div>
 
           {/* AI suggestions */}
@@ -112,31 +103,6 @@ export default async function AnalysisPage() {
               </div>
             </section>
           )}
-
-          {/* Charts */}
-          <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <ChartCard
-              title="Revenue by week"
-              subtitle="Last 8 weeks (current week in progress)"
-            >
-              <RevenueByWeekChart data={weekly} />
-            </ChartCard>
-            <ChartCard
-              title="Revenue by day of week"
-              subtitle={`Totals over the last ${WINDOW_DAYS} days`}
-            >
-              <DayOfWeekChart data={byDay} />
-            </ChartCard>
-          </div>
-
-          <div className="mt-4">
-            <ChartCard
-              title="Orders by hour"
-              subtitle={`When guests order · last ${WINDOW_DAYS} days`}
-            >
-              <HourlyChart data={byHour} />
-            </ChartCard>
-          </div>
 
           {/* Per-item performance */}
           <section className="mt-6">
@@ -190,56 +156,6 @@ export default async function AnalysisPage() {
           </p>
         </>
       )}
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  trendPct,
-}: {
-  label: string;
-  value: string;
-  trendPct: number | null;
-}) {
-  return (
-    <div className="rounded-2xl border border-border bg-card p-4">
-      <div className="text-[13px] font-medium text-muted-foreground">{label}</div>
-      <div className="mt-1.5 text-2xl font-bold tracking-tight">{value}</div>
-      {trendPct !== null && (
-        <div
-          className={cn(
-            "mt-1 inline-flex items-center gap-1 text-[12px] font-medium",
-            trendPct >= 0 ? "text-green-700" : "text-destructive",
-          )}
-        >
-          {trendPct >= 0 ? (
-            <ArrowUpRight className="size-3.5" />
-          ) : (
-            <ArrowDownRight className="size-3.5" />
-          )}
-          {Math.abs(trendPct)}% vs previous 7 days
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ChartCard({
-  title,
-  subtitle,
-  children,
-}: {
-  title: string;
-  subtitle: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-2xl border border-border bg-card p-4">
-      <h3 className="text-sm font-semibold">{title}</h3>
-      <p className="mb-3 mt-0.5 text-[12px] text-muted-foreground">{subtitle}</p>
-      {children}
     </div>
   );
 }

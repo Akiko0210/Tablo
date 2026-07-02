@@ -55,11 +55,11 @@ export interface SeedOptions {
 }
 
 /**
- * Generates ~10 weeks of served orders from the restaurant's menu items.
- * Deterministic per restaurantId. The alphabetically-last item is given a
- * decaying popularity so the "selling low for a month" insight has something
- * real to find; overall volume trends gently upward so week-over-week growth
- * is visible.
+ * Generates roughly a year of served orders from the restaurant's menu items
+ * (enough history for the Analysis explorer's month and year views to be
+ * meaningful). Deterministic per restaurantId. One item is given a decaying
+ * popularity so the "selling low for a month" insight has something real to
+ * find; overall volume trends gently upward so growth over time is visible.
  */
 export function generateHistory(
   restaurantId: string,
@@ -69,7 +69,7 @@ export function generateHistory(
   const usable = menuItems.filter((m) => m.price > 0);
   if (usable.length === 0) return [];
 
-  const days = options.days ?? 70;
+  const days = options.days ?? 400;
   const now = options.now ?? new Date();
   const rng = mulberry32(hashString(restaurantId));
 

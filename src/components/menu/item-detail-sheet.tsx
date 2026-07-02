@@ -92,7 +92,8 @@ export function ItemDetailSheet({
           {/* Photo header */}
           <ItemVisual
             item={item}
-            className="h-44 w-full shrink-0 rounded-t-2xl text-6xl"
+            className="h-44 w-full shrink-0 rounded-t-2xl"
+            iconClassName="size-12"
           />
 
           <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">

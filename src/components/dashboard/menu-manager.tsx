@@ -3,6 +3,8 @@
 import * as React from "react";
 import { toast } from "sonner";
 import {
+  ImageIcon,
+  ImagePlus,
   Loader2,
   Pencil,
   Plus,
@@ -10,10 +12,12 @@ import {
   Sparkles,
   Trash2,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import type { MenuItemRecord } from "@/lib/menu/store";
 import type { GenerationJob } from "@/lib/menu/generation-store";
-import type { Category } from "@/lib/types";
+import { validateUploadFile } from "@/lib/uploads/limits";
+import type { AddOn, Category, SizeOption } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -23,12 +27,12 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface MenuPayload {
@@ -169,9 +173,18 @@ export function MenuManager() {
                       item.soldOut && "opacity-60",
                     )}
                   >
-                    <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted text-lg">
-                      {item.emoji ?? "🍽️"}
-                    </span>
+                    {item.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- user upload served from /api/uploads
+                      <img
+                        src={item.imageUrl}
+                        alt=""
+                        className="size-10 shrink-0 rounded-xl object-cover"
+                      />
+                    ) : (
+                      <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-muted to-secondary text-muted-foreground">
+                        <ImageIcon className="size-4" strokeWidth={1.5} />
+                      </span>
+                    )}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="truncate text-sm font-semibold">
@@ -234,7 +247,7 @@ export function MenuManager() {
         </div>
       )}
 
-      <ItemEditorSheet
+      <ItemEditorDialog
         state={editor}
         onOpenChange={(open) => setEditor((e) => ({ ...e, open }))}
         onSaved={() => {
@@ -320,15 +333,52 @@ function GenerationBanner({
   );
 }
 
+// Draft rows for the guest-facing option lists. `key` keeps React list identity
+// stable across edits; `id` preserves an existing option's id (empty for a row
+// the user just added — the store assigns one on save).
+interface SizeDraft {
+  key: number;
+  id: string;
+  label: string;
+  priceDelta: string;
+  note: string;
+}
+
+interface AddonDraft {
+  key: number;
+  id: string;
+  label: string;
+  price: string;
+}
+
 interface EditorFields {
   name: string;
   description: string;
   price: string;
   category: string;
-  emoji: string;
+  imageUrl: string;
+  sizes: SizeDraft[];
+  addons: AddonDraft[];
 }
 
-function ItemEditorSheet({
+let optionKeySeq = 0;
+const nextKey = () => (optionKeySeq += 1);
+
+function sizeDraftFrom(s: SizeOption): SizeDraft {
+  return {
+    key: nextKey(),
+    id: s.id,
+    label: s.label,
+    priceDelta: String(s.priceDelta),
+    note: s.note ?? "",
+  };
+}
+
+function addonDraftFrom(a: AddOn): AddonDraft {
+  return { key: nextKey(), id: a.id, label: a.label, price: String(a.price) };
+}
+
+function ItemEditorDialog({
   state,
   onOpenChange,
   onSaved,
@@ -340,10 +390,12 @@ function ItemEditorSheet({
   const { open, item } = state;
   const [fields, setFields] = React.useState<EditorFields>(emptyFields());
   const [pending, setPending] = React.useState(false);
+  const [uploading, setUploading] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
     if (open) {
-      // Reset the form to the item being edited each time the sheet opens.
+      // Reset the form to the item being edited each time the dialog opens.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setFields(
         item
@@ -352,15 +404,64 @@ function ItemEditorSheet({
               description: item.description,
               price: String(item.price),
               category: labelFromCategoryId(item.categoryId),
-              emoji: item.emoji ?? "",
+              imageUrl: item.imageUrl ?? "",
+              sizes: (item.sizes ?? []).map(sizeDraftFrom),
+              addons: (item.addons ?? []).map(addonDraftFrom),
             }
           : emptyFields(),
       );
     }
   }, [open, item]);
 
-  function set<K extends keyof EditorFields>(key: K, value: string) {
+  function set<K extends keyof EditorFields>(key: K, value: EditorFields[K]) {
     setFields((f) => ({ ...f, [key]: value }));
+  }
+
+  async function uploadImage(file: File) {
+    // Same rules the server enforces — fail fast with a friendlier message.
+    const check = validateUploadFile({ type: file.type, size: file.size });
+    if (!check.ok) {
+      toast.error(check.error);
+      return;
+    }
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("files", file);
+      form.append("kind", "item-image");
+      const res = await fetch("/api/uploads", { method: "POST", body: form });
+      const data = await res.json().catch(() => ({}));
+      const result = data?.results?.[0];
+      if (!res.ok || !result?.url) {
+        toast.error(result?.error ?? "Couldn't upload the image.");
+        return;
+      }
+      setFields((f) => ({ ...f, imageUrl: result.url }));
+    } catch {
+      toast.error("Couldn't upload the image.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) uploadImage(file);
+    // Reset so re-selecting the same file still fires onChange.
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function updateSize(key: number, patch: Partial<SizeDraft>) {
+    set(
+      "sizes",
+      fields.sizes.map((s) => (s.key === key ? { ...s, ...patch } : s)),
+    );
+  }
+  function updateAddon(key: number, patch: Partial<AddonDraft>) {
+    set(
+      "addons",
+      fields.addons.map((a) => (a.key === key ? { ...a, ...patch } : a)),
+    );
   }
 
   const valid =
@@ -378,7 +479,24 @@ function ItemEditorSheet({
       description: fields.description,
       price: Number(fields.price),
       category: fields.category,
-      emoji: fields.emoji || undefined,
+      // "" clears the photo server-side; a set path swaps it in.
+      imageUrl: fields.imageUrl,
+      // Drop unnamed rows, then hand ids back so existing options keep theirs.
+      sizes: fields.sizes
+        .filter((s) => s.label.trim())
+        .map((s) => ({
+          id: s.id || undefined,
+          label: s.label.trim(),
+          priceDelta: Number(s.priceDelta) || 0,
+          note: s.note.trim() || undefined,
+        })),
+      addons: fields.addons
+        .filter((a) => a.label.trim())
+        .map((a) => ({
+          id: a.id || undefined,
+          label: a.label.trim(),
+          price: Number(a.price) || 0,
+        })),
     };
     try {
       const res = item
@@ -407,18 +525,92 @@ function ItemEditorSheet({
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full sm:max-w-md">
-        <SheetHeader>
-          <SheetTitle>{item ? `Edit ${item.name}` : "Add menu item"}</SheetTitle>
-          <SheetDescription>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="gap-0 overflow-hidden">
+        <DialogHeader className="border-b border-border p-4 pr-12">
+          <DialogTitle>
+            {item ? `Edit ${item.name}` : "Add menu item"}
+          </DialogTitle>
+          <DialogDescription>
             {item
               ? "Changes go live on guests' menus immediately."
               : "New items appear on guests' menus immediately."}
-          </SheetDescription>
-        </SheetHeader>
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="flex flex-col gap-4 px-4 pb-4">
+        <div className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto p-4">
+          {/* Photo */}
+          <div>
+            <Label className="mb-1.5 block">Photo</Label>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              className="hidden"
+              onChange={onPickFile}
+            />
+            {fields.imageUrl ? (
+              <div className="relative overflow-hidden rounded-xl border border-border">
+                {/* eslint-disable-next-line @next/next/no-img-element -- user upload served from /api/uploads */}
+                <img
+                  src={fields.imageUrl}
+                  alt=""
+                  className="h-40 w-full object-cover"
+                />
+                {uploading && (
+                  <div className="absolute inset-0 grid place-items-center bg-black/40">
+                    <Loader2 className="size-6 animate-spin text-white" />
+                  </div>
+                )}
+                <div className="absolute right-2 top-2 flex gap-1.5">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                  >
+                    Replace
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="secondary"
+                    aria-label="Remove photo"
+                    onClick={() => set("imageUrl", "")}
+                    disabled={uploading}
+                  >
+                    <X className="size-4" />
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className={cn(
+                  "flex w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-muted/30 px-6 py-7 text-center transition-colors hover:bg-muted/50",
+                  uploading && "cursor-not-allowed opacity-70",
+                )}
+              >
+                <span className="grid size-9 place-items-center rounded-full bg-brand-soft text-brand">
+                  {uploading ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <ImagePlus className="size-4" />
+                  )}
+                </span>
+                <span className="text-sm font-medium">
+                  {uploading ? "Uploading…" : "Click to upload a photo"}
+                </span>
+                <span className="text-[12px] text-muted-foreground">
+                  JPEG, PNG, WebP, or GIF · up to 5MB
+                </span>
+              </button>
+            )}
+          </div>
+
           <div>
             <Label htmlFor="mi-name" className="mb-1.5 block">
               Name
@@ -435,7 +627,7 @@ function ItemEditorSheet({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label htmlFor="mi-price" className="mb-1.5 block">
-                Price
+                Base price
               </Label>
               <Input
                 id="mi-price"
@@ -449,30 +641,17 @@ function ItemEditorSheet({
               />
             </div>
             <div>
-              <Label htmlFor="mi-emoji" className="mb-1.5 block">
-                Emoji <span className="text-muted-foreground">(optional)</span>
+              <Label htmlFor="mi-category" className="mb-1.5 block">
+                Category
               </Label>
               <Input
-                id="mi-emoji"
-                value={fields.emoji}
-                onChange={(e) => set("emoji", e.target.value)}
-                placeholder="🍕"
+                id="mi-category"
+                value={fields.category}
+                onChange={(e) => set("category", e.target.value)}
+                placeholder="Pizza"
                 className="h-10"
               />
             </div>
-          </div>
-
-          <div>
-            <Label htmlFor="mi-category" className="mb-1.5 block">
-              Category
-            </Label>
-            <Input
-              id="mi-category"
-              value={fields.category}
-              onChange={(e) => set("category", e.target.value)}
-              placeholder="Pizza"
-              className="h-10"
-            />
           </div>
 
           <div>
@@ -489,10 +668,107 @@ function ItemEditorSheet({
             />
           </div>
 
+          {/* Sizes — the "Size" choice shown on the guest item sheet. */}
+          <OptionGroup
+            title="Sizes"
+            hint="A required, single-choice list (e.g. Regular / Large)."
+            addLabel="Add size"
+            onAdd={() =>
+              set("sizes", [
+                ...fields.sizes,
+                { key: nextKey(), id: "", label: "", priceDelta: "0", note: "" },
+              ])
+            }
+          >
+            {fields.sizes.map((s) => (
+              <div
+                key={s.key}
+                className="rounded-xl border border-border bg-muted/30 p-2.5"
+              >
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={s.label}
+                    onChange={(e) => updateSize(s.key, { label: e.target.value })}
+                    placeholder='Regular · 12"'
+                    className="h-9 flex-1"
+                    aria-label="Size label"
+                  />
+                  <RemoveButton
+                    label="Remove size"
+                    onClick={() =>
+                      set(
+                        "sizes",
+                        fields.sizes.filter((x) => x.key !== s.key),
+                      )
+                    }
+                  />
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <PriceField
+                    prefix="+$"
+                    value={s.priceDelta}
+                    onChange={(v) => updateSize(s.key, { priceDelta: v })}
+                    aria-label="Extra charge for this size"
+                  />
+                  <Input
+                    value={s.note}
+                    onChange={(e) => updateSize(s.key, { note: e.target.value })}
+                    placeholder="Note (e.g. Included)"
+                    className="h-9"
+                    aria-label="Size note"
+                  />
+                </div>
+              </div>
+            ))}
+          </OptionGroup>
+
+          {/* Add-ons — the optional "Add-ons" checklist on the guest sheet. */}
+          <OptionGroup
+            title="Add-ons"
+            hint="Optional extras guests can tick (e.g. Extra mozzarella)."
+            addLabel="Add add-on"
+            onAdd={() =>
+              set("addons", [
+                ...fields.addons,
+                { key: nextKey(), id: "", label: "", price: "0" },
+              ])
+            }
+          >
+            {fields.addons.map((a) => (
+              <div key={a.key} className="flex items-center gap-2">
+                <Input
+                  value={a.label}
+                  onChange={(e) => updateAddon(a.key, { label: e.target.value })}
+                  placeholder="Extra mozzarella"
+                  className="h-9 flex-1"
+                  aria-label="Add-on label"
+                />
+                <PriceField
+                  prefix="+$"
+                  value={a.price}
+                  onChange={(v) => updateAddon(a.key, { price: v })}
+                  className="w-24"
+                  aria-label="Add-on price"
+                />
+                <RemoveButton
+                  label="Remove add-on"
+                  onClick={() =>
+                    set(
+                      "addons",
+                      fields.addons.filter((x) => x.key !== a.key),
+                    )
+                  }
+                />
+              </div>
+            ))}
+          </OptionGroup>
+        </div>
+
+        <div className="border-t border-border p-4">
           <Button
             onClick={save}
-            disabled={!valid || pending}
-            className="h-11 rounded-xl font-semibold"
+            disabled={!valid || pending || uploading}
+            className="h-11 w-full rounded-xl font-semibold"
           >
             {pending ? (
               <>
@@ -505,11 +781,105 @@ function ItemEditorSheet({
             )}
           </Button>
         </div>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Titled section wrapping a list of option rows with an "add" button. */
+function OptionGroup({
+  title,
+  hint,
+  addLabel,
+  onAdd,
+  children,
+}: {
+  title: string;
+  hint: string;
+  addLabel: string;
+  onAdd: () => void;
+  children: React.ReactNode;
+}) {
+  const rows = React.Children.toArray(children);
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <Label className="block">{title}</Label>
+        <Button type="button" variant="ghost" size="sm" onClick={onAdd}>
+          <Plus className="size-3.5" /> {addLabel}
+        </Button>
+      </div>
+      <p className="mb-2 text-[12px] text-muted-foreground">{hint}</p>
+      {rows.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-border px-3 py-2.5 text-[13px] text-muted-foreground">
+          None yet.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">{children}</div>
+      )}
+    </div>
+  );
+}
+
+function PriceField({
+  prefix,
+  value,
+  onChange,
+  className,
+  ...rest
+}: {
+  prefix: string;
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+} & Omit<React.ComponentProps<typeof Input>, "value" | "onChange">) {
+  return (
+    <div className={cn("relative", className)}>
+      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+        {prefix}
+      </span>
+      <Input
+        type="number"
+        min={0}
+        step="0.01"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-9 pl-8"
+        {...rest}
+      />
+    </div>
+  );
+}
+
+function RemoveButton({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className="size-9 shrink-0 text-muted-foreground hover:text-destructive"
+      aria-label={label}
+      onClick={onClick}
+    >
+      <X className="size-4" />
+    </Button>
   );
 }
 
 function emptyFields(): EditorFields {
-  return { name: "", description: "", price: "", category: "", emoji: "" };
+  return {
+    name: "",
+    description: "",
+    price: "",
+    category: "",
+    imageUrl: "",
+    sizes: [],
+    addons: [],
+  };
 }

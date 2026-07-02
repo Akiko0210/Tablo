@@ -34,6 +34,9 @@ export interface MenuItem {
   tags: DietaryTag[];
   /** Emoji/photo stand-in — the design uses a soft photo tile. */
   emoji?: string;
+  /** Uploaded photo, served from /api/uploads/[id]. Shown in place of the
+   * placeholder tile when present. */
+  imageUrl?: string;
   soldOut?: boolean;
   /** Surfaced in the "Popular" tab and flagged with a "Most loved" badge. */
   popular?: boolean;

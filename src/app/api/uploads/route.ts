@@ -53,6 +53,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No files provided" }, { status: 400 });
   }
 
+  // "item-image" uploads are a single photo per menu item — they don't count
+  // toward the analysis-photo cap. Anything else is a "menu-photo".
+  const kind = form.get("kind") === "item-image" ? "item-image" : "menu-photo";
+
   const existing = countUploadsForOwner(session.userId);
   const results: UploadResult[] = [];
   let accepted = 0;
@@ -63,7 +67,7 @@ export async function POST(request: Request) {
       results.push({ filename: file.name, error: check.error });
       continue;
     }
-    if (existing + accepted >= MAX_PHOTOS_PER_ACCOUNT) {
+    if (kind === "menu-photo" && existing + accepted >= MAX_PHOTOS_PER_ACCOUNT) {
       results.push({
         filename: file.name,
         error: `Limit of ${MAX_PHOTOS_PER_ACCOUNT} photos reached`,
@@ -74,6 +78,7 @@ export async function POST(request: Request) {
     const data = Buffer.from(await file.arrayBuffer());
     const saved = saveUpload({
       ownerId: session.userId,
+      kind,
       mime: file.type,
       filename: file.name,
       data,

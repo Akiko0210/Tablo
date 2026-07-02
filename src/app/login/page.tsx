@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
-import { getSession } from "@/lib/auth/current";
+import { getStaffContext } from "@/lib/auth/current";
 import { Logo } from "@/components/landing/logo";
 import { LoginForm } from "@/components/auth/login-form";
 
@@ -11,9 +11,12 @@ export const metadata: Metadata = {
 };
 
 export default async function LoginPage() {
-  // Already signed in? Skip straight to the dashboard.
-  const session = await getSession();
-  if (session) redirect("/dashboard");
+  // Already signed in (and the session's restaurant still resolves)? Skip
+  // straight to the dashboard. A session with no resolvable restaurant must
+  // fall through to the login form instead of bouncing back to /dashboard,
+  // which would loop forever against its own staff-context check.
+  const context = await getStaffContext();
+  if (context) redirect("/dashboard");
 
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center bg-cream px-5 py-12">

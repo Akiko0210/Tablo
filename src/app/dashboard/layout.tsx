@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/auth/current";
+import { getStaffContext } from "@/lib/auth/current";
 import { findUserByIdAny } from "@/lib/auth/directory";
 import { initialsFrom } from "@/lib/auth/initials";
 import {
@@ -12,8 +12,13 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await getSession();
-  if (!session) redirect("/login");
+  // Requires both a valid session and a resolvable restaurant, matching the
+  // gate used by /api/orders and other staff routes — a session whose
+  // restaurant is missing (e.g. in-memory store reset) must not render the
+  // dashboard shell, or the client's 401 handling loops against /login.
+  const context = await getStaffContext();
+  if (!context) redirect("/login");
+  const { session } = context;
 
   const user = findUserByIdAny(session.userId);
   const name = user?.name ?? session.name;

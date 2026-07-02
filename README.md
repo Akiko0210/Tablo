@@ -91,16 +91,29 @@ items can be added by hand.
 
 ## Analysis
 
-**Dashboard → Analysis** shows: revenue/orders/avg-order for the last 7 days
-vs the 7 before; revenue by week (8 weeks); revenue by day of week; orders by
-hour; and a per-item table (orders, revenue, trend vs the previous 28 days).
-Above the charts, plain-language **suggestions** are computed from the same
-numbers ([`src/lib/analysis/insights.ts`](src/lib/analysis/insights.ts)):
-items selling low for a month (“maybe change the menu”), rising stars, dishes
-that never sell, strongest/weakest day, weekend lift, peak hour.
+**Dashboard → Analysis** is built around one **revenue + orders explorer**
+([`revenue-explorer.tsx`](src/components/dashboard/revenue-explorer.tsx)):
 
-So the page is meaningful from day one, each restaurant gets deterministic
-sample sales history generated from its own menu
+- Toggle the metric between **Revenue** and **Orders**.
+- Toggle the granularity between **Day / Week / Month / Year**, and step
+  through time with the ‹ › range navigator — Day shows one calendar day by
+  hour (next → the next day), Week shows Mon–Sun, Month shows every day of the
+  month, Year shows all 12 months. "Next" is disabled on the current period.
+- Bars for Day/Week (few discrete buckets); a filled trend line (area chart)
+  for Month/Year, which reads far better than bars at that density.
+- The headline shows the selected period's total with its change vs the
+  immediately preceding period.
+
+All bucketing is pure and unit-tested
+([`src/lib/analysis/series.ts`](src/lib/analysis/series.ts)). Below the chart,
+plain-language **suggestions** are computed from the order data
+([`src/lib/analysis/insights.ts`](src/lib/analysis/insights.ts)) — items
+selling low for a month (“maybe change the menu”), rising stars, dishes that
+never sell, strongest day, weekend lift, peak hour — followed by a per-item
+performance table (orders, revenue, trend vs the previous 28 days).
+
+So the page is meaningful from day one, each restaurant gets roughly a year of
+deterministic sample sales history generated from its own menu
 ([`src/lib/analysis/seed-history.ts`](src/lib/analysis/seed-history.ts)) the
 first time Analysis is opened; real served orders fold into the same numbers.
 Sample history never appears on the live orders board.
@@ -157,15 +170,16 @@ swapping in SQLite/Postgres is localized.
 ## Testing
 
 ```bash
-npm run test         # Vitest — 187 unit + component tests
+npm run test         # Vitest — 204 unit + component tests
 npm run lint         # ESLint
 npm run build        # Type-check + production build
 ```
 
 Tests cover cart math, money/URL formatting, menu queries and validation,
 the restaurant registry (slugs, kitchen codes), tenant-scoped order and menu
-stores, analysis stats + insights + deterministic history seeding, worker
-time math / store / validation, and the auth/signup layer.
+stores, analysis stats + the explorer's period bucketing/navigation
+(`series.ts`) + insights + deterministic history seeding, worker time math /
+store / validation, and the auth/signup layer.
 
 ## Project structure
 
@@ -186,7 +200,7 @@ src/
     restaurants/                 tenancy root: registry, slugs, validation
     menu/                        per-restaurant menu store, AI generation, queries
     orders/                      tenant-scoped order store + validation
-    analysis/                    stats, insights, deterministic sample history
+    analysis/                    series bucketing, stats, insights, sample history
     workers/                     worker registry, time clock math, validation
     kitchen/                     kitchen-device session
     auth/ uploads/               accounts, sessions, photo store
