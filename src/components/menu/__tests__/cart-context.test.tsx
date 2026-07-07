@@ -1,11 +1,22 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { CartProvider, useCart } from "../cart-context";
 import { cartItemCount, cartSubtotal } from "@/lib/cart";
 
+// A distinct key per test keeps persisted carts from leaking between cases.
+let keySeq = 0;
+let storageKey = "test-cart";
+
+beforeEach(() => {
+  window.localStorage.clear();
+  storageKey = `test-cart:${keySeq++}`;
+});
+
 function setup() {
   return renderHook(() => useCart(), {
-    wrapper: ({ children }) => <CartProvider>{children}</CartProvider>,
+    wrapper: ({ children }) => (
+      <CartProvider storageKey={storageKey}>{children}</CartProvider>
+    ),
   });
 }
 
@@ -74,5 +85,44 @@ describe("cart reducer via context", () => {
     act(() => result.current.add({ ...base, ...large, unitPrice: 18 }));
     act(() => result.current.clear());
     expect(result.current.lines).toHaveLength(0);
+  });
+});
+
+describe("cart persistence (survives a refresh)", () => {
+  it("restores the cart when remounted with the same key", () => {
+    const first = setup();
+    act(() => first.result.current.add({ ...base, ...regular, quantity: 2 }));
+    act(() => first.result.current.add({ ...base, ...large, unitPrice: 18 }));
+    expect(first.result.current.lines).toHaveLength(2);
+    first.unmount();
+
+    // A refresh = a fresh provider reading the same storage key.
+    const second = setup();
+    expect(second.result.current.lines).toHaveLength(2);
+    expect(cartItemCount(second.result.current.lines)).toBe(3);
+    expect(second.result.current.lines[0].optionLabels).toEqual([
+      'Regular · 12"',
+    ]);
+  });
+
+  it("does not share a cart across different keys (tables)", () => {
+    const first = setup();
+    act(() => first.result.current.add({ ...base, ...regular }));
+    first.unmount();
+
+    // Different table → different key → empty cart.
+    storageKey = `test-cart:other-${keySeq++}`;
+    const second = setup();
+    expect(second.result.current.lines).toHaveLength(0);
+  });
+
+  it("clearing the cart wipes the persisted copy", () => {
+    const first = setup();
+    act(() => first.result.current.add({ ...base, ...regular }));
+    act(() => first.result.current.clear());
+    first.unmount();
+
+    const second = setup();
+    expect(second.result.current.lines).toHaveLength(0);
   });
 });

@@ -49,6 +49,11 @@ export function ItemDetailSheet({
 }) {
   const { add } = useCart();
 
+  // Focus target when the sheet opens: a non-input container, so focus stays
+  // inside the dialog (Escape/screen readers still work) without the special-
+  // requests textarea grabbing focus and popping the mobile keyboard.
+  const focusRef = React.useRef<HTMLDivElement>(null);
+
   const [selections, setSelections] = React.useState<Record<string, string[]>>(
     () => defaultSelections(item),
   );
@@ -108,6 +113,7 @@ export function ItemDetailSheet({
     });
     toast.success(`Added to order`, {
       description: `${qty} × ${item!.name}`,
+      duration: 100,
     });
     onOpenChange(false);
   }
@@ -117,8 +123,13 @@ export function ItemDetailSheet({
       <SheetContent
         side="bottom"
         className="mx-auto max-h-[92vh] w-full max-w-[480px] gap-0 rounded-t-2xl p-0"
+        initialFocus={focusRef}
       >
-        <div className="flex max-h-[92vh] flex-col">
+        <div
+          ref={focusRef}
+          tabIndex={-1}
+          className="flex max-h-[92vh] flex-col outline-none"
+        >
           {/* Photo header */}
           <ItemVisual
             item={item}

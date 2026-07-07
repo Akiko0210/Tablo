@@ -131,7 +131,7 @@ export function MenuApp({
     <div className="flex min-h-dvh justify-center bg-background">
       <div className="relative flex min-h-dvh w-full max-w-[480px] flex-col bg-card sm:border-x sm:border-border sm:shadow-sm">
         <RestaurantProvider restaurant={restaurant}>
-          <CartProvider>
+          <CartProvider storageKey={`tablo-cart:${restaurant.slug}:${tableId}`}>
             <MenuFlow tableId={tableId} />
           </CartProvider>
         </RestaurantProvider>
