@@ -1,25 +1,19 @@
 import { NextResponse } from "next/server";
 import { getStaffContext } from "@/lib/auth/current";
-import {
-  createWorker,
-  listWorkers,
-  workerPresenceList,
-} from "@/lib/workers/store";
+import { createWorker, workerPresenceList } from "@/lib/workers/store";
 import { parseWorkerInput } from "@/lib/workers/validate";
 
-// GET /api/workers — staff only. Worker profiles + live presence. The manager
-// view includes each worker's PIN so they can hand it out.
+// GET /api/workers — staff only. Worker profiles + live presence. PINs are
+// never returned: they're hashed at rest and known only to whoever set them
+// (the manager types the PIN when creating/editing the worker).
 export async function GET() {
   const ctx = await getStaffContext();
   if (!ctx) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const pins = new Map(listWorkers(ctx.restaurant.id).map((w) => [w.id, w.pin]));
-  const workers = workerPresenceList(ctx.restaurant.id).map((p) => ({
-    ...p,
-    pin: pins.get(p.id),
-  }));
-  return NextResponse.json({ workers });
+  return NextResponse.json({
+    workers: await workerPresenceList(ctx.restaurant.id),
+  });
 }
 
 // POST /api/workers — staff only. Add a worker profile.
@@ -44,6 +38,9 @@ export async function POST(request: Request) {
     );
   }
 
-  const worker = createWorker(ctx.restaurant.id, parsed.data);
+  const worker = await createWorker(ctx.restaurant.id, parsed.data);
+  if ("error" in worker) {
+    return NextResponse.json({ error: worker.error }, { status: 409 });
+  }
   return NextResponse.json({ worker }, { status: 201 });
 }

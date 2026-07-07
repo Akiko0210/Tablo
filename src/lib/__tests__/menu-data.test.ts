@@ -17,8 +17,20 @@ describe("menu data integrity", () => {
   it("has no negative prices", () => {
     for (const item of restaurant.items) {
       expect(item.price).toBeGreaterThanOrEqual(0);
-      item.sizes?.forEach((s) => expect(s.priceDelta).toBeGreaterThanOrEqual(0));
-      item.addons?.forEach((a) => expect(a.price).toBeGreaterThanOrEqual(0));
+      item.modifierGroups?.forEach((g) =>
+        g.options.forEach((o) =>
+          expect(o.priceDelta).toBeGreaterThanOrEqual(0),
+        ),
+      );
+    }
+  });
+
+  it("keeps every modifier group's min ≤ max ≤ option count", () => {
+    for (const item of restaurant.items) {
+      for (const g of item.modifierGroups ?? []) {
+        expect(g.min).toBeLessThanOrEqual(g.max);
+        expect(g.max).toBeLessThanOrEqual(g.options.length);
+      }
     }
   });
 

@@ -7,7 +7,8 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import { listUploadsForOwner } from "@/lib/uploads/store";
+import type { ModifierGroup } from "@/lib/types";
+import { getUploadData, listUploadsForOwner } from "@/lib/uploads/store";
 import { replaceAiItems, type MenuItemInput } from "./store";
 import { setGenerationJob } from "./generation-store";
 
@@ -23,6 +24,26 @@ const ExtractedMenuSchema = z.object({
       category: z.string(),
       /** A single emoji that fits the dish, used as the photo stand-in. */
       emoji: z.string().nullable(),
+      /** Guest choices printed on the menu (sizes, protein, spice level…).
+       * Null when the menu shows none for this item. */
+      modifierGroups: z
+        .array(
+          z.object({
+            label: z.string(),
+            /** True when the guest must pick (e.g. a size or protein). */
+            required: z.boolean(),
+            /** Most selections allowed; 1 = single choice. */
+            maxSelect: z.number(),
+            options: z.array(
+              z.object({
+                label: z.string(),
+                /** Surcharge over the base price; null/0 when included. */
+                priceDelta: z.number().nullable(),
+              }),
+            ),
+          }),
+        )
+        .nullable(),
     }),
   ),
 });
@@ -35,6 +56,7 @@ Extract every distinct menu item you can identify. For each item:
 - price: the price as a number if visible anywhere, otherwise null — never invent a price
 - category: a short menu section like "Starters", "Mains", "Noodles", "Desserts", "Drinks"
 - emoji: one emoji that best represents the dish, or null
+- modifierGroups: choices the menu offers for the item — a size list, a protein choice (chicken/pork/tofu), spice level, sides, or paid add-ons. For each group give a short label, whether the guest must pick one (required), how many they may pick (maxSelect), and the options with their surcharge over the base price (priceDelta, 0 or null when included). Only include groups the menu actually shows — use null when there are none; never invent choices.
 
 Skip anything that isn't food or drink. Don't duplicate items that appear in multiple photos.`;
 
@@ -49,30 +71,32 @@ export async function runMenuGeneration(
   ownerUserId: string,
   restaurantId: string,
 ): Promise<void> {
-  const uploads = listUploadsForOwner(ownerUserId);
+  const uploads = await listUploadsForOwner(ownerUserId);
   if (uploads.length === 0) {
-    setGenerationJob(restaurantId, {
+    await setGenerationJob(restaurantId, {
       status: "skipped",
       message: "No photos uploaded yet — add some in Settings, then generate.",
     });
     return;
   }
 
-  setGenerationJob(restaurantId, {
+  await setGenerationJob(restaurantId, {
     status: "running",
     message: `Analyzing ${uploads.length} photo${uploads.length === 1 ? "" : "s"}…`,
   });
 
   try {
     const client = new Anthropic();
-    const imageBlocks = uploads.slice(0, 6).map((u) => ({
-      type: "image" as const,
-      source: {
-        type: "base64" as const,
-        media_type: u.mime as SupportedMediaType,
-        data: u.data.toString("base64"),
-      },
-    }));
+    const imageBlocks = await Promise.all(
+      uploads.slice(0, 6).map(async (u) => ({
+        type: "image" as const,
+        source: {
+          type: "base64" as const,
+          media_type: u.mime as SupportedMediaType,
+          data: (await getUploadData(u)).toString("base64"),
+        },
+      })),
+    );
 
     const response = await client.messages.parse({
       model: MODEL,
@@ -88,7 +112,7 @@ export async function runMenuGeneration(
     });
 
     if (response.stop_reason === "refusal" || !response.parsed_output) {
-      setGenerationJob(restaurantId, {
+      await setGenerationJob(restaurantId, {
         status: "failed",
         message: "The model couldn't extract a menu from these photos.",
       });
@@ -103,20 +127,57 @@ export async function runMenuGeneration(
         price: item.price ?? 0,
         category: item.category || "Menu",
         emoji: item.emoji ?? undefined,
+        modifierGroups: sanitizeGroups(item.modifierGroups),
       }));
 
-    const created = replaceAiItems(restaurantId, inputs);
-    setGenerationJob(restaurantId, {
+    const created = await replaceAiItems(restaurantId, inputs);
+    await setGenerationJob(restaurantId, {
       status: "done",
       itemCount: created.length,
       message: `Created ${created.length} menu item${created.length === 1 ? "" : "s"} from your photos.`,
     });
   } catch (error) {
-    setGenerationJob(restaurantId, {
+    await setGenerationJob(restaurantId, {
       status: "failed",
       message: friendlyGenerationError(error),
     });
   }
+}
+
+type ExtractedGroups = z.infer<
+  typeof ExtractedMenuSchema
+>["items"][number]["modifierGroups"];
+
+/** Clamp model output into store-valid groups (min ≤ max ≤ option count);
+ * groups without usable options are dropped. Ids are assigned by the store. */
+function sanitizeGroups(groups: ExtractedGroups): ModifierGroup[] | undefined {
+  if (!groups) return undefined;
+  const clean = groups.slice(0, 6).flatMap((g) => {
+    const options = g.options
+      .filter((o) => o.label.trim())
+      .slice(0, 20)
+      .map((o) => ({
+        id: "",
+        label: o.label.trim().slice(0, 60),
+        priceDelta: Math.max(0, o.priceDelta ?? 0),
+      }));
+    if (!g.label.trim() || options.length === 0) return [];
+    const max = Math.min(
+      Math.max(Math.floor(g.maxSelect) || 1, 1),
+      options.length,
+    );
+    return [
+      {
+        id: "",
+        label: g.label.trim().slice(0, 60),
+        min: g.required ? 1 : 0,
+        max,
+        required: g.required,
+        options,
+      },
+    ];
+  });
+  return clean.length > 0 ? clean : undefined;
 }
 
 const CREDENTIALS_HINT =

@@ -1,137 +1,159 @@
-// In-memory order store, scoped per restaurant. Persists for the lifetime of
-// the server process, which is enough for the demo: guests POST orders and the
-// dashboard reads them live. Swap the internals for SQLite/Postgres later
-// without changing callers.
-//
-// Attached to globalThis so it survives dev HMR module reloads.
+// Order store backed by Postgres via Prisma. Externally an order's `id` is its
+// per-restaurant display id ("ord-1003") — same shape the in-memory store
+// exposed — while the DB keeps its own primary key. All lookups here are
+// restaurant-scoped, so the (restaurantId, displayId) unique pair is enough.
 
-import { DEMO_RESTAURANT_ID } from "@/lib/restaurants/store";
+import crypto from "node:crypto";
+import type { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/db";
 import type { NewOrderInput, Order, OrderStatus } from "./types";
 
-interface OrderStore {
-  orders: Order[];
-  seq: number;
-  /** Restaurants whose synthetic analysis history has been generated. */
-  historySeeded: Set<string>;
-}
+type OrderWithLines = Prisma.OrderGetPayload<{ include: { lines: true } }>;
 
-const globalForStore = globalThis as unknown as {
-  __tabloOrderStore?: OrderStore;
+const orderInclude = {
+  lines: { orderBy: { sortIndex: "asc" as const } },
 };
 
-function seed(): OrderStore {
-  const now = Date.now();
-  const store: OrderStore = {
-    orders: [],
-    seq: 0,
-    historySeeded: new Set(),
+function toOrder(row: OrderWithLines): Order {
+  return {
+    id: row.displayId,
+    restaurantId: row.restaurantId,
+    table: row.table,
+    lines: row.lines.map((l) => ({
+      name: l.name,
+      quantity: l.quantity,
+      unitPrice: Number(l.unitPrice),
+      // New lines carry optionLabels; legacy lines fold size/add-ons in.
+      optionLabels: l.optionLabels.length
+        ? l.optionLabels
+        : [l.sizeLabel, ...l.addonLabels].filter((x): x is string => !!x),
+      note: l.note ?? undefined,
+    })),
+    subtotal: Number(row.subtotal),
+    kitchenNote: row.kitchenNote ?? undefined,
+    status: row.status,
+    createdAt: row.createdAt.toISOString(),
+    seeded: row.seeded || undefined,
   };
-  // A couple of orders already "in the kitchen" so the dashboard isn't empty
-  // the first time it's opened.
-  store.orders.push(
-    {
-      id: "ord-1001",
-      restaurantId: DEMO_RESTAURANT_ID,
-      table: "4",
-      lines: [
-        {
-          name: "Margherita",
-          quantity: 1,
-          unitPrice: 14,
-          sizeLabel: 'Regular · 12"',
-          addonLabels: [],
-        },
-        { name: "Aperol Spritz", quantity: 2, unitPrice: 11, addonLabels: [] },
-      ],
-      subtotal: 36,
-      status: "preparing",
-      createdAt: new Date(now - 8 * 60_000).toISOString(),
-    },
-    {
-      id: "ord-1002",
-      restaurantId: DEMO_RESTAURANT_ID,
-      table: "9",
-      lines: [
-        {
-          name: "Tagliatelle al Ragù",
-          quantity: 1,
-          unitPrice: 18,
-          addonLabels: ["Extra parmesan"],
-          note: "No chili",
-        },
-      ],
-      subtotal: 20,
-      kitchenNote: "Guest has a nut allergy.",
-      status: "new",
-      createdAt: new Date(now - 2 * 60_000).toISOString(),
-    },
-  );
-  store.seq = 1002;
-  return store;
-}
-
-function getStore(): OrderStore {
-  if (!globalForStore.__tabloOrderStore) {
-    globalForStore.__tabloOrderStore = seed();
-  }
-  return globalForStore.__tabloOrderStore;
 }
 
 /** Live (non-seeded) orders for one restaurant, newest first. */
-export function listOrders(restaurantId: string): Order[] {
-  return getStore()
-    .orders.filter((o) => o.restaurantId === restaurantId && !o.seeded)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+export async function listOrders(restaurantId: string): Promise<Order[]> {
+  const rows = await prisma.order.findMany({
+    where: { restaurantId, seeded: false },
+    include: orderInclude,
+    orderBy: { createdAt: "desc" },
+  });
+  return rows.map(toOrder);
 }
 
 /** Every order for a restaurant including synthetic history — analysis only. */
-export function listAllOrdersForAnalysis(restaurantId: string): Order[] {
-  return getStore().orders.filter((o) => o.restaurantId === restaurantId);
+export async function listAllOrdersForAnalysis(
+  restaurantId: string,
+): Promise<Order[]> {
+  const rows = await prisma.order.findMany({
+    where: { restaurantId },
+    include: orderInclude,
+  });
+  return rows.map(toOrder);
 }
 
-export function createOrder(restaurantId: string, input: NewOrderInput): Order {
-  const store = getStore();
-  store.seq += 1;
-  const order: Order = {
-    id: `ord-${store.seq}`,
-    restaurantId,
-    table: input.table,
-    lines: input.lines,
-    subtotal: input.subtotal,
-    kitchenNote: input.kitchenNote?.trim() || undefined,
-    status: "new",
-    createdAt: new Date().toISOString(),
-  };
-  store.orders.push(order);
-  return order;
+export async function createOrder(
+  restaurantId: string,
+  input: NewOrderInput,
+): Promise<Order> {
+  const row = await prisma.$transaction(async (tx) => {
+    const { orderSeq } = await tx.restaurant.update({
+      where: { id: restaurantId },
+      data: { orderSeq: { increment: 1 } },
+      select: { orderSeq: true },
+    });
+    return tx.order.create({
+      data: {
+        restaurantId,
+        displayId: `ord-${orderSeq}`,
+        table: input.table,
+        subtotal: input.subtotal,
+        kitchenNote: input.kitchenNote?.trim() || null,
+        lines: {
+          create: input.lines.map((line, i) => ({
+            name: line.name,
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+            optionLabels: line.optionLabels,
+            note: line.note ?? null,
+            sortIndex: i,
+          })),
+        },
+      },
+      include: orderInclude,
+    });
+  });
+  return toOrder(row);
 }
 
 /** Advance an order's status. The restaurantId guard prevents one tenant from
  * touching another tenant's orders. */
-export function updateOrderStatus(
+export async function updateOrderStatus(
   restaurantId: string,
   id: string,
   status: OrderStatus,
-): Order | undefined {
-  const order = getStore().orders.find(
-    (o) => o.id === id && o.restaurantId === restaurantId,
-  );
-  if (!order) return undefined;
-  order.status = status;
-  return order;
+): Promise<Order | undefined> {
+  try {
+    const row = await prisma.order.update({
+      where: {
+        restaurantId_displayId: { restaurantId, displayId: id },
+      },
+      data: { status },
+      include: orderInclude,
+    });
+    return toOrder(row);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Bulk-insert synthetic history (used by the analysis seeder). Idempotent per
  * restaurant: the second call is a no-op. Returns whether seeding ran. */
-export function insertSeededHistory(
+export async function insertSeededHistory(
   restaurantId: string,
   orders: Omit<Order, "seeded">[],
-): boolean {
-  const store = getStore();
-  if (store.historySeeded.has(restaurantId)) return false;
-  store.historySeeded.add(restaurantId);
-  for (const order of orders) {
-    store.orders.push({ ...order, seeded: true });
-  }
+): Promise<boolean> {
+  // Claim the seed slot atomically; a concurrent second call matches 0 rows.
+  const { count } = await prisma.restaurant.updateMany({
+    where: { id: restaurantId, historySeededAt: null },
+    data: { historySeededAt: new Date() },
+  });
+  if (count === 0) return false;
+
+  // createMany (no nested writes) — the history is thousands of rows.
+  const pkFor = new Map(orders.map((o) => [o.id, `seedord_${crypto.randomUUID()}`]));
+  await prisma.order.createMany({
+    data: orders.map((o) => ({
+      id: pkFor.get(o.id)!,
+      restaurantId,
+      displayId: o.id,
+      table: o.table,
+      subtotal: o.subtotal,
+      kitchenNote: o.kitchenNote ?? null,
+      status: o.status,
+      seeded: true,
+      createdAt: new Date(o.createdAt),
+    })),
+    skipDuplicates: true,
+  });
+  await prisma.orderLine.createMany({
+    data: orders.flatMap((o) =>
+      o.lines.map((line, i) => ({
+        orderId: pkFor.get(o.id)!,
+        name: line.name,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        optionLabels: line.optionLabels,
+        note: line.note ?? null,
+        sortIndex: i,
+      })),
+    ),
+  });
   return true;
 }

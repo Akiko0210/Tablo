@@ -102,6 +102,13 @@ export function LoginForm() {
         <Link href="/signup" className="font-medium text-foreground underline">
           Create an account
         </Link>
+        {" · "}
+        <Link
+          href="/forgot-password"
+          className="font-medium text-foreground underline"
+        >
+          Forgot password?
+        </Link>
       </p>
     </form>
   );

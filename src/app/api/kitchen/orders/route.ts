@@ -8,5 +8,5 @@ export async function GET() {
   if (!restaurant) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  return NextResponse.json({ orders: listOrders(restaurant.id) });
+  return NextResponse.json({ orders: await listOrders(restaurant.id) });
 }

@@ -1,8 +1,17 @@
-// In-memory blob store for uploaded menu photos. Same lifetime/HMR pattern as
-// src/lib/orders/store.ts — persists while the server runs, not durable.
-// Swapping to S3/blob storage later is isolated to this file.
+// Uploaded menu photos. Metadata lives in Postgres; the bytes go to R2 when
+// object storage is configured (production), or into the same Postgres row as
+// a zero-config dev fallback.
 
 import crypto from "node:crypto";
+import type { Upload as UploadRow } from "@prisma/client";
+import { prisma } from "@/lib/db";
+import {
+  storageConfigured,
+  storageDelete,
+  storageGet,
+  storagePublicUrl,
+  storagePut,
+} from "./storage";
 
 /**
  * "menu-photo" = the analysis photos an owner uploads (the AI reads these, they
@@ -18,23 +27,24 @@ export interface StoredUpload {
   kind: UploadKind;
   mime: string;
   filename: string;
-  data: Buffer;
+  /** Set when the bytes live in object storage. */
+  storageKey?: string;
+  /** Set when the bytes live in the DB row (dev fallback). */
+  data?: Buffer;
   createdAt: string;
 }
 
-interface UploadStore {
-  uploads: StoredUpload[];
-}
-
-const globalForUploads = globalThis as unknown as {
-  __tabloUploadStore?: UploadStore;
-};
-
-function getStore(): UploadStore {
-  if (!globalForUploads.__tabloUploadStore) {
-    globalForUploads.__tabloUploadStore = { uploads: [] };
-  }
-  return globalForUploads.__tabloUploadStore;
+function toUpload(row: UploadRow): StoredUpload {
+  return {
+    id: row.id,
+    ownerId: row.ownerId,
+    kind: row.kind as UploadKind,
+    mime: row.mime,
+    filename: row.filename,
+    storageKey: row.storageKey ?? undefined,
+    data: row.data ? Buffer.from(row.data) : undefined,
+    createdAt: row.createdAt.toISOString(),
+  };
 }
 
 export interface SaveUploadInput {
@@ -46,46 +56,75 @@ export interface SaveUploadInput {
   kind?: UploadKind;
 }
 
-export function saveUpload(input: SaveUploadInput): StoredUpload {
-  const upload: StoredUpload = {
-    ...input,
-    id: crypto.randomUUID(),
-    createdAt: new Date().toISOString(),
-    kind: input.kind ?? "menu-photo",
-  };
-  getStore().uploads.push(upload);
-  return upload;
+export async function saveUpload(input: SaveUploadInput): Promise<StoredUpload> {
+  const id = crypto.randomUUID();
+  const kind = input.kind ?? "menu-photo";
+  let storageKey: string | null = null;
+  if (storageConfigured()) {
+    storageKey = `uploads/${input.ownerId}/${id}`;
+    await storagePut(storageKey, input.data, input.mime);
+  }
+  const row = await prisma.upload.create({
+    data: {
+      id,
+      ownerId: input.ownerId,
+      kind,
+      mime: input.mime,
+      filename: input.filename,
+      storageKey,
+      data: storageKey ? null : new Uint8Array(input.data),
+    },
+  });
+  return toUpload(row);
 }
 
-export function getUpload(id: string): StoredUpload | undefined {
-  return getStore().uploads.find((u) => u.id === id);
+export async function getUpload(id: string): Promise<StoredUpload | undefined> {
+  const row = await prisma.upload.findUnique({ where: { id } });
+  return row ? toUpload(row) : undefined;
+}
+
+/** The upload's bytes, wherever they live — for the AI analysis, which sends
+ * them to the vision model as base64. */
+export async function getUploadData(upload: StoredUpload): Promise<Buffer> {
+  if (upload.data) return upload.data;
+  if (upload.storageKey) return storageGet(upload.storageKey);
+  throw new Error(`Upload ${upload.id} has no bytes`);
+}
+
+/** Public URL for the bytes when they live in object storage (served by the
+ * R2 CDN); undefined when the app should stream the DB bytes itself. */
+export function uploadPublicUrl(upload: StoredUpload): string | undefined {
+  return upload.storageKey ? storagePublicUrl(upload.storageKey) : undefined;
 }
 
 /** Count an owner's uploads of a given kind — defaults to the analysis photos
  * so the per-account cap and Settings ignore item images. */
-export function countUploadsForOwner(
+export async function countUploadsForOwner(
   ownerId: string,
   kind: UploadKind = "menu-photo",
-): number {
-  return getStore().uploads.filter(
-    (u) => u.ownerId === ownerId && u.kind === kind,
-  ).length;
+): Promise<number> {
+  return prisma.upload.count({ where: { ownerId, kind } });
 }
 
-export function listUploadsForOwner(
+export async function listUploadsForOwner(
   ownerId: string,
   kind: UploadKind = "menu-photo",
-): StoredUpload[] {
-  return getStore().uploads.filter(
-    (u) => u.ownerId === ownerId && u.kind === kind,
-  );
+): Promise<StoredUpload[]> {
+  const rows = await prisma.upload.findMany({
+    where: { ownerId, kind },
+    orderBy: { createdAt: "asc" },
+  });
+  return rows.map(toUpload);
 }
 
 /** Deletes an upload, but only if it belongs to the requesting owner. */
-export function deleteUpload(id: string, ownerId: string): boolean {
-  const store = getStore();
-  const idx = store.uploads.findIndex((u) => u.id === id && u.ownerId === ownerId);
-  if (idx === -1) return false;
-  store.uploads.splice(idx, 1);
+export async function deleteUpload(
+  id: string,
+  ownerId: string,
+): Promise<boolean> {
+  const row = await prisma.upload.findFirst({ where: { id, ownerId } });
+  if (!row) return false;
+  if (row.storageKey) await storageDelete(row.storageKey);
+  await prisma.upload.delete({ where: { id } });
   return true;
 }

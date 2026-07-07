@@ -125,6 +125,9 @@ export interface ItemStat {
   /** Percent change in units vs the previous window; null when there's no
    * baseline (prevUnits === 0). */
   trendPct: number | null;
+  /** Distinct calendar days with at least one sale in the current window —
+   * a one-day spike shouldn't read as a trend. */
+  distinctDays: number;
 }
 
 /** Per-item sales over the last `days` days, with a trend vs the preceding
@@ -137,18 +140,24 @@ export function itemPerformance(
   const windowStart = now.getTime() - days * DAY_MS;
   const prevStart = windowStart - days * DAY_MS;
 
-  const current = new Map<string, { units: number; revenue: number }>();
+  const current = new Map<
+    string,
+    { units: number; revenue: number; days: Set<string> }
+  >();
   const previous = new Map<string, number>();
 
   for (const order of completed(orders)) {
-    const t = new Date(order.createdAt).getTime();
+    const created = new Date(order.createdAt);
+    const t = created.getTime();
     if (t > now.getTime() || t < prevStart) continue;
     const inCurrent = t >= windowStart;
     for (const line of order.lines) {
       if (inCurrent) {
-        const entry = current.get(line.name) ?? { units: 0, revenue: 0 };
+        const entry =
+          current.get(line.name) ?? { units: 0, revenue: 0, days: new Set<string>() };
         entry.units += line.quantity;
         entry.revenue += line.quantity * line.unitPrice;
+        entry.days.add(created.toDateString());
         current.set(line.name, entry);
       } else {
         previous.set(line.name, (previous.get(line.name) ?? 0) + line.quantity);
@@ -158,7 +167,7 @@ export function itemPerformance(
 
   const names = new Set([...current.keys(), ...previous.keys()]);
   const stats: ItemStat[] = [...names].map((name) => {
-    const cur = current.get(name) ?? { units: 0, revenue: 0 };
+    const cur = current.get(name) ?? { units: 0, revenue: 0, days: new Set() };
     const prevUnits = previous.get(name) ?? 0;
     return {
       name,
@@ -169,6 +178,7 @@ export function itemPerformance(
         prevUnits === 0
           ? null
           : Math.round(((cur.units - prevUnits) / prevUnits) * 100),
+      distinctDays: cur.days.size,
     };
   });
 
@@ -178,10 +188,21 @@ export function itemPerformance(
 export interface PeriodSummary {
   revenue: number;
   orders: number;
+  /** Units sold across all order lines. */
+  items: number;
   avgOrder: number;
+  itemsPerOrder: number;
   /** vs the preceding period; null when there's no baseline. */
   revenueTrendPct: number | null;
   ordersTrendPct: number | null;
+  avgOrderTrendPct: number | null;
+  itemsPerOrderTrendPct: number | null;
+}
+
+function trendPct(current: number, previous: number): number | null {
+  return previous === 0
+    ? null
+    : Math.round(((current - previous) / previous) * 100);
 }
 
 /** Headline numbers for the last `days` days vs the preceding `days` days. */
@@ -193,34 +214,81 @@ export function periodSummary(
   const windowStart = now.getTime() - days * DAY_MS;
   const prevStart = windowStart - days * DAY_MS;
 
-  let revenue = 0;
-  let count = 0;
-  let prevRevenue = 0;
-  let prevCount = 0;
+  const cur = { revenue: 0, orders: 0, items: 0 };
+  const prev = { revenue: 0, orders: 0, items: 0 };
 
   for (const order of completed(orders)) {
     const t = new Date(order.createdAt).getTime();
     if (t > now.getTime() || t < prevStart) continue;
-    if (t >= windowStart) {
-      revenue += order.subtotal;
-      count += 1;
-    } else {
-      prevRevenue += order.subtotal;
-      prevCount += 1;
+    const bucket = t >= windowStart ? cur : prev;
+    bucket.revenue += order.subtotal;
+    bucket.orders += 1;
+    bucket.items += order.lines.reduce((n, l) => n + l.quantity, 0);
+  }
+
+  const avgOrder = cur.orders === 0 ? 0 : cur.revenue / cur.orders;
+  const prevAvgOrder = prev.orders === 0 ? 0 : prev.revenue / prev.orders;
+  const itemsPerOrder = cur.orders === 0 ? 0 : cur.items / cur.orders;
+  const prevItemsPerOrder = prev.orders === 0 ? 0 : prev.items / prev.orders;
+
+  return {
+    revenue: Math.round(cur.revenue * 100) / 100,
+    orders: cur.orders,
+    items: cur.items,
+    avgOrder: Math.round(avgOrder * 100) / 100,
+    itemsPerOrder: Math.round(itemsPerOrder * 10) / 10,
+    revenueTrendPct: trendPct(cur.revenue, prev.revenue),
+    ordersTrendPct: trendPct(cur.orders, prev.orders),
+    avgOrderTrendPct: trendPct(avgOrder, prevAvgOrder),
+    itemsPerOrderTrendPct: trendPct(itemsPerOrder, prevItemsPerOrder),
+  };
+}
+
+export interface ActivitySummary {
+  /** Completed orders in the current window. */
+  totalOrders: number;
+  /** Completed orders in the equally-sized previous window. */
+  prevTotalOrders: number;
+  /** Distinct calendar days with at least one sale in the window. */
+  activeDays: number;
+  /** Distinct Saturdays/Sundays with at least one sale in the window. */
+  activeWeekendDays: number;
+}
+
+/** How much signal the window actually holds — used to gate insights so a
+ * brand-new restaurant isn't told "Tuesdays are slow" off three orders. */
+export function activitySummary(
+  orders: Order[],
+  days = 28,
+  now = new Date(),
+): ActivitySummary {
+  const windowStart = now.getTime() - days * DAY_MS;
+  const prevStart = windowStart - days * DAY_MS;
+
+  let totalOrders = 0;
+  let prevTotalOrders = 0;
+  const activeDates = new Set<string>();
+  const weekendDates = new Set<string>();
+
+  for (const order of completed(orders)) {
+    const created = new Date(order.createdAt);
+    const t = created.getTime();
+    if (t > now.getTime() || t < prevStart) continue;
+    if (t < windowStart) {
+      prevTotalOrders += 1;
+      continue;
     }
+    totalOrders += 1;
+    const key = created.toDateString();
+    activeDates.add(key);
+    const dow = created.getDay();
+    if (dow === 0 || dow === 6) weekendDates.add(key);
   }
 
   return {
-    revenue: Math.round(revenue * 100) / 100,
-    orders: count,
-    avgOrder: count === 0 ? 0 : Math.round((revenue / count) * 100) / 100,
-    revenueTrendPct:
-      prevRevenue === 0
-        ? null
-        : Math.round(((revenue - prevRevenue) / prevRevenue) * 100),
-    ordersTrendPct:
-      prevCount === 0
-        ? null
-        : Math.round(((count - prevCount) / prevCount) * 100),
+    totalOrders,
+    prevTotalOrders,
+    activeDays: activeDates.size,
+    activeWeekendDays: weekendDates.size,
   };
 }

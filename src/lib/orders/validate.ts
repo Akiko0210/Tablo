@@ -1,56 +1,72 @@
-// Defensive parsing of the untrusted order payload a guest POSTs. Returns a
-// clean NewOrderInput or null if the shape is invalid. Pure — unit tested.
+// Defensive parsing of the untrusted order payload a guest POSTs. Only shape
+// checks live here — pricing and menu validation happen in price.ts against
+// the restaurant's real menu. Pure — unit tested.
 
-import type { NewOrderInput, OrderLine } from "./types";
+import type { NewOrderRequest, NewOrderRequestLine } from "./types";
+
+/** Hard caps so a hostile payload can't create absurd rows. */
+const MAX_LINES = 50;
+const MAX_QUANTITY = 99;
+const MAX_OPTION_IDS = 40;
+const MAX_NOTE_LENGTH = 300;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
 
-function parseLine(raw: unknown): OrderLine | null {
+function parseLine(raw: unknown): NewOrderRequestLine | null {
   if (!isRecord(raw)) return null;
-  const { name, quantity, unitPrice, sizeLabel, addonLabels, note } = raw;
-  if (typeof name !== "string" || !name.trim()) return null;
-  if (typeof quantity !== "number" || !Number.isFinite(quantity) || quantity < 1)
+  const { itemId, quantity, optionIds, note } = raw;
+  if (typeof itemId !== "string" || !itemId.trim()) return null;
+  if (
+    typeof quantity !== "number" ||
+    !Number.isFinite(quantity) ||
+    quantity < 1 ||
+    quantity > MAX_QUANTITY
+  )
     return null;
-  if (typeof unitPrice !== "number" || !Number.isFinite(unitPrice) || unitPrice < 0)
-    return null;
+  let ids: string[] = [];
+  if (optionIds !== undefined) {
+    if (!Array.isArray(optionIds) || optionIds.length > MAX_OPTION_IDS)
+      return null;
+    if (!optionIds.every((id): id is string => typeof id === "string"))
+      return null;
+    ids = optionIds;
+  }
+  if (note !== undefined && typeof note !== "string") return null;
+  const trimmedNote = typeof note === "string" ? note.trim() : "";
+  if (trimmedNote.length > MAX_NOTE_LENGTH) return null;
   return {
-    name: name.trim(),
+    itemId: itemId.trim(),
     quantity: Math.floor(quantity),
-    unitPrice,
-    sizeLabel: typeof sizeLabel === "string" ? sizeLabel : undefined,
-    addonLabels: Array.isArray(addonLabels)
-      ? addonLabels.filter((a): a is string => typeof a === "string")
-      : [],
-    note: typeof note === "string" && note.trim() ? note.trim() : undefined,
+    optionIds: ids,
+    note: trimmedNote || undefined,
   };
 }
 
-export function parseNewOrder(body: unknown): NewOrderInput | null {
+export function parseNewOrder(body: unknown): NewOrderRequest | null {
   if (!isRecord(body)) return null;
-  const { table, lines, subtotal, kitchenNote } = body;
+  const { table, lines, kitchenNote } = body;
 
   if (typeof table !== "string" || !table.trim()) return null;
-  if (!Array.isArray(lines) || lines.length === 0) return null;
+  if (!Array.isArray(lines) || lines.length === 0 || lines.length > MAX_LINES)
+    return null;
 
-  const parsedLines: OrderLine[] = [];
+  const parsedLines: NewOrderRequestLine[] = [];
   for (const raw of lines) {
     const line = parseLine(raw);
     if (!line) return null;
     parsedLines.push(line);
   }
 
-  if (typeof subtotal !== "number" || !Number.isFinite(subtotal) || subtotal < 0)
-    return null;
+  if (kitchenNote !== undefined && typeof kitchenNote !== "string") return null;
+  const trimmedKitchenNote =
+    typeof kitchenNote === "string" ? kitchenNote.trim() : "";
+  if (trimmedKitchenNote.length > MAX_NOTE_LENGTH) return null;
 
   return {
     table: table.trim(),
     lines: parsedLines,
-    subtotal,
-    kitchenNote:
-      typeof kitchenNote === "string" && kitchenNote.trim()
-        ? kitchenNote.trim()
-        : undefined,
+    kitchenNote: trimmedKitchenNote || undefined,
   };
 }

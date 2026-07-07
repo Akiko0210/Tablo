@@ -1,7 +1,8 @@
 "use client";
 
-import { DollarSign, Receipt, Flame, ArrowRight } from "lucide-react";
+import { DollarSign, Receipt, Flame, ArrowRight, Layers } from "lucide-react";
 import { formatMoney } from "@/lib/format";
+import { useNow } from "@/lib/use-now";
 import { ButtonLink } from "@/components/ui/button-link";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useOrders } from "./use-orders";
@@ -16,16 +17,23 @@ function greeting(): string {
 
 export function Overview({ firstName }: { firstName: string }) {
   const { orders, loading, updateStatus } = useOrders();
+  const now = useNow();
 
   const count = orders.length;
   const sales = orders.reduce((sum, o) => sum + o.subtotal, 0);
+  const items = orders.reduce(
+    (sum, o) => sum + o.lines.reduce((n, l) => n + l.quantity, 0),
+    0,
+  );
   const avg = count ? sales / count : 0;
+  const itemsPerOrder = count ? items / count : 0;
   const active = orders.filter((o) => o.status !== "served");
 
   const stats = [
     { label: "Sales today", value: formatMoney(sales), icon: DollarSign },
     { label: "Orders", value: String(count), icon: Receipt },
     { label: "Avg order", value: formatMoney(avg), icon: Receipt },
+    { label: "Items / order", value: itemsPerOrder.toFixed(1), icon: Layers },
     { label: "In the kitchen", value: String(active.length), icon: Flame },
   ];
 
@@ -39,7 +47,7 @@ export function Overview({ firstName }: { firstName: string }) {
       </p>
 
       {/* Stats */}
-      <div className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-5">
         {stats.map((s) =>
           loading && count === 0 ? (
             <Skeleton key={s.label} className="h-24 rounded-2xl" />
@@ -77,7 +85,12 @@ export function Overview({ firstName }: { firstName: string }) {
       ) : (
         <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {active.slice(0, 6).map((order) => (
-            <OrderCard key={order.id} order={order} onAdvance={updateStatus} />
+            <OrderCard
+              key={order.id}
+              order={order}
+              onAdvance={updateStatus}
+              now={now}
+            />
           ))}
         </div>
       )}

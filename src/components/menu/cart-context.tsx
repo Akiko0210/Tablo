@@ -9,10 +9,8 @@ type AddPayload = {
   name: string;
   quantity: number;
   unitPrice: number;
-  sizeId?: string;
-  sizeLabel?: string;
-  addonIds: string[];
-  addonLabels: string[];
+  optionIds: string[];
+  optionLabels: string[];
   note?: string;
 };
 
@@ -27,7 +25,7 @@ function reducer(state: CartLine[], action: Action): CartLine[] {
   switch (action.type) {
     case "add": {
       const p = action.payload;
-      const lineId = buildLineId(p.itemId, p.sizeId, p.addonIds);
+      const lineId = buildLineId(p.itemId, p.optionIds);
       const existing = state.find((l) => l.lineId === lineId);
       // Merge identical configurations; a note makes a line distinct enough
       // that we keep the incoming note rather than silently dropping it.
@@ -48,8 +46,8 @@ function reducer(state: CartLine[], action: Action): CartLine[] {
         name: p.name,
         quantity: p.quantity,
         unitPrice: p.unitPrice,
-        sizeLabel: p.sizeLabel,
-        addonLabels: p.addonLabels,
+        optionIds: p.optionIds,
+        optionLabels: p.optionLabels,
         note: p.note?.trim() || undefined,
       };
       return [...state, line];

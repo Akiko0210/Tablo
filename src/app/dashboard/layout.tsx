@@ -6,6 +6,7 @@ import {
   DashboardSidebar,
   DashboardMobileNav,
 } from "@/components/dashboard/nav";
+import { VerifyEmailBanner } from "@/components/dashboard/verify-email-banner";
 
 export default async function DashboardLayout({
   children,
@@ -20,7 +21,7 @@ export default async function DashboardLayout({
   if (!context) redirect("/login");
   const { session } = context;
 
-  const user = findUserByIdAny(session.userId);
+  const user = await findUserByIdAny(session.userId);
   const name = user?.name ?? session.name;
   const initials = user?.initials ?? initialsFrom(name);
   const restaurantName = user?.restaurantName ?? "Your restaurant";
@@ -34,7 +35,12 @@ export default async function DashboardLayout({
       />
       <div className="md:pl-60">
         <DashboardMobileNav />
-        <main className="mx-auto max-w-6xl px-5 py-6 md:py-8">{children}</main>
+        <main className="mx-auto max-w-6xl px-5 py-6 md:py-8">
+          {user && !user.emailVerified && (
+            <VerifyEmailBanner email={user.email} />
+          )}
+          {children}
+        </main>
       </div>
     </div>
   );

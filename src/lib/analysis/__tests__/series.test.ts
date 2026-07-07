@@ -11,8 +11,8 @@ import {
 // Anchor: Thursday, May 14, 2026, 13:30 local.
 const ANCHOR = new Date(2026, 4, 14, 13, 30, 0);
 
-function ev(date: Date, revenue: number): SalesEvent {
-  return { t: date.getTime(), revenue };
+function ev(date: Date, revenue: number, items = 1): SalesEvent {
+  return { t: date.getTime(), revenue, items };
 }
 
 describe("periodStart / periodEnd", () => {

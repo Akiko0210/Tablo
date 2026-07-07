@@ -16,7 +16,7 @@ export default async function RestaurantMenuIndex({
   const { restaurant } = await params;
   const segment = decodeURIComponent(restaurant);
 
-  if (findRestaurantBySlug(segment)) {
+  if (await findRestaurantBySlug(segment)) {
     redirect(`/m/${encodeURIComponent(segment)}/1`);
   }
   if (/^\d+$/.test(segment)) {

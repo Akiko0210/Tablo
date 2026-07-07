@@ -15,9 +15,9 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   return NextResponse.json({
-    items: listMenuItems(ctx.restaurant.id),
-    categories: categoriesFor(ctx.restaurant.id),
-    generation: getGenerationJob(ctx.restaurant.id),
+    items: await listMenuItems(ctx.restaurant.id),
+    categories: await categoriesFor(ctx.restaurant.id),
+    generation: await getGenerationJob(ctx.restaurant.id),
   });
 }
 
@@ -43,6 +43,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const item = addMenuItem(ctx.restaurant.id, parsed.data, "manual");
+  const item = await addMenuItem(ctx.restaurant.id, parsed.data, "manual");
   return NextResponse.json({ item }, { status: 201 });
 }

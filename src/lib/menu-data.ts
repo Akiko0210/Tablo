@@ -6,15 +6,30 @@ import type { MenuItem, Restaurant } from "./types";
 // setup. Prices are in USD major units.
 // ---------------------------------------------------------------------------
 
-const PIZZA_SIZES = [
-  { id: "reg", label: 'Regular · 12"', priceDelta: 0, note: "Included" },
-  { id: "lg", label: 'Large · 16"', priceDelta: 4 },
-];
-
-const PIZZA_ADDONS = [
-  { id: "mozz", label: "Extra mozzarella", price: 3 },
-  { id: "truffle", label: "Truffle oil drizzle", price: 2 },
-  { id: "nduja", label: "'Nduja", price: 3 },
+const PIZZA_GROUPS = [
+  {
+    id: "pizza-size",
+    label: "Size",
+    min: 1,
+    max: 1,
+    required: true,
+    options: [
+      { id: "reg", label: 'Regular · 12"', priceDelta: 0, note: "Included" },
+      { id: "lg", label: 'Large · 16"', priceDelta: 4 },
+    ],
+  },
+  {
+    id: "pizza-addons",
+    label: "Add-ons",
+    min: 0,
+    max: 3,
+    required: false,
+    options: [
+      { id: "mozz", label: "Extra mozzarella", priceDelta: 3 },
+      { id: "truffle", label: "Truffle oil drizzle", priceDelta: 2 },
+      { id: "nduja", label: "'Nduja", priceDelta: 3 },
+    ],
+  },
 ];
 
 const items: MenuItem[] = [
@@ -29,8 +44,7 @@ const items: MenuItem[] = [
     tags: ["Vegetarian", "Contains gluten", "Dairy"],
     emoji: "🍕",
     popular: true,
-    sizes: PIZZA_SIZES,
-    addons: PIZZA_ADDONS,
+    modifierGroups: PIZZA_GROUPS,
   },
   {
     id: "diavola",
@@ -41,8 +55,7 @@ const items: MenuItem[] = [
     tags: ["Spicy", "Contains gluten", "Dairy"],
     emoji: "🍕",
     popular: true,
-    sizes: PIZZA_SIZES,
-    addons: PIZZA_ADDONS,
+    modifierGroups: PIZZA_GROUPS,
   },
   {
     id: "marinara",
@@ -52,8 +65,7 @@ const items: MenuItem[] = [
     categoryId: "pizza",
     tags: ["Vegan", "Contains gluten"],
     emoji: "🍅",
-    sizes: PIZZA_SIZES,
-    addons: PIZZA_ADDONS,
+    modifierGroups: PIZZA_GROUPS,
   },
   {
     id: "quattro-formaggi",
@@ -64,8 +76,7 @@ const items: MenuItem[] = [
     tags: ["Vegetarian", "Contains gluten", "Dairy"],
     emoji: "🧀",
     soldOut: true,
-    sizes: PIZZA_SIZES,
-    addons: PIZZA_ADDONS,
+    modifierGroups: PIZZA_GROUPS,
   },
 
   // ---- Pasta ----
@@ -78,9 +89,18 @@ const items: MenuItem[] = [
     tags: ["Contains gluten", "Dairy"],
     emoji: "🍝",
     popular: true,
-    addons: [
-      { id: "parm", label: "Extra parmesan", price: 2 },
-      { id: "chili", label: "Chili flakes", price: 0 },
+    modifierGroups: [
+      {
+        id: "ragu-extras",
+        label: "Extras",
+        min: 0,
+        max: 2,
+        required: false,
+        options: [
+          { id: "parm", label: "Extra parmesan", priceDelta: 2 },
+          { id: "chili", label: "Chili flakes", priceDelta: 0 },
+        ],
+      },
     ],
   },
   {

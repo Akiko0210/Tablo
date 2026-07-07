@@ -21,7 +21,7 @@ export interface StaffContext {
 export async function getStaffContext(): Promise<StaffContext | null> {
   const session = await getSession();
   if (!session) return null;
-  const restaurant = restaurantForUser(session.userId);
+  const restaurant = await restaurantForUser(session.userId);
   if (!restaurant) return null;
   return { session, restaurant };
 }

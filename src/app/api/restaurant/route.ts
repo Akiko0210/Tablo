@@ -26,6 +26,6 @@ export async function PATCH(request: Request) {
     );
   }
 
-  const restaurant = updateRestaurant(ctx.restaurant.id, parsed.data);
+  const restaurant = await updateRestaurant(ctx.restaurant.id, parsed.data);
   return NextResponse.json({ restaurant });
 }

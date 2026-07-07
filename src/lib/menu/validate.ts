@@ -1,7 +1,7 @@
 // Defensive parsing of untrusted menu-item payloads from the dashboard.
 // Pure — unit tested. Mirrors the parse-or-error pattern in auth/validate-signup.
 
-import type { AddOn, SizeOption } from "@/lib/types";
+import type { ModifierGroup, ModifierOption } from "@/lib/types";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
@@ -17,10 +17,8 @@ export interface MenuItemBody {
   emoji?: string;
   /** Path to an uploaded photo (/api/uploads/[id]), or undefined to clear it. */
   imageUrl?: string;
-  /** Guest-facing size choices (e.g. Regular / Large). */
-  sizes?: SizeOption[];
-  /** Guest-facing add-ons (e.g. Extra mozzarella). */
-  addons?: AddOn[];
+  /** Guest-facing choice groups (sizes, protein, spice level, add-ons…). */
+  modifierGroups?: ModifierGroup[];
 }
 
 interface ParseResult<T> {
@@ -28,7 +26,9 @@ interface ParseResult<T> {
   error?: string;
 }
 
-/** How many size / add-on rows a single item may carry. */
+/** How many choice groups a single item may carry. */
+const MAX_GROUPS = 6;
+/** How many option rows a single group may carry. */
 const MAX_OPTIONS = 20;
 
 function parsePrice(raw: unknown): number | null {
@@ -54,25 +54,27 @@ function parseImageUrl(
   return { ok: true, value: trimmed };
 }
 
-/** Parse the "Size" rows shown on the guest item sheet. Ids are optional — the
- * store assigns one to any row that arrives without it. */
-function parseSizes(raw: unknown): ParseResult<SizeOption[]> {
-  if (!Array.isArray(raw)) return { error: "Invalid sizes" };
-  if (raw.length > MAX_OPTIONS) return { error: "Too many sizes" };
-  const sizes: SizeOption[] = [];
+/** Parse one group's option rows. Ids are optional — the store assigns one to
+ * any row that arrives without it. */
+function parseOptions(raw: unknown): ParseResult<ModifierOption[]> {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return { error: "Each choice group needs at least one option" };
+  if (raw.length > MAX_OPTIONS) return { error: "Too many options in a group" };
+  const options: ModifierOption[] = [];
   for (const entry of raw) {
-    if (!isRecord(entry)) return { error: "Invalid size" };
+    if (!isRecord(entry)) return { error: "Invalid option" };
     if (typeof entry.label !== "string" || !entry.label.trim())
-      return { error: "Each size needs a label" };
-    if (entry.label.trim().length > 60) return { error: "Size label is too long" };
+      return { error: "Each option needs a label" };
+    if (entry.label.trim().length > 60)
+      return { error: "Option label is too long" };
     const priceDelta = parsePrice(entry.priceDelta);
-    if (priceDelta === null) return { error: "Size price must be 0 or more" };
+    if (priceDelta === null) return { error: "Option price must be 0 or more" };
     if (
       entry.note !== undefined &&
       (typeof entry.note !== "string" || entry.note.length > 40)
     )
-      return { error: "Invalid size note" };
-    sizes.push({
+      return { error: "Invalid option note" };
+    options.push({
       id: parseOptionId(entry.id) ?? "",
       label: entry.label.trim(),
       priceDelta,
@@ -82,29 +84,53 @@ function parseSizes(raw: unknown): ParseResult<SizeOption[]> {
           : undefined,
     });
   }
-  return { data: sizes };
+  return { data: options };
 }
 
-/** Parse the "Add-ons" rows shown on the guest item sheet. */
-function parseAddons(raw: unknown): ParseResult<AddOn[]> {
-  if (!Array.isArray(raw)) return { error: "Invalid add-ons" };
-  if (raw.length > MAX_OPTIONS) return { error: "Too many add-ons" };
-  const addons: AddOn[] = [];
+/** Parse the item's choice groups. Enforces min ≤ max ≤ option count and
+ * normalizes a required group's min to at least 1. */
+function parseModifierGroups(raw: unknown): ParseResult<ModifierGroup[]> {
+  if (!Array.isArray(raw)) return { error: "Invalid choice groups" };
+  if (raw.length > MAX_GROUPS) return { error: "Too many choice groups" };
+  const groups: ModifierGroup[] = [];
   for (const entry of raw) {
-    if (!isRecord(entry)) return { error: "Invalid add-on" };
+    if (!isRecord(entry)) return { error: "Invalid choice group" };
     if (typeof entry.label !== "string" || !entry.label.trim())
-      return { error: "Each add-on needs a label" };
+      return { error: "Each choice group needs a label" };
     if (entry.label.trim().length > 60)
-      return { error: "Add-on label is too long" };
-    const price = parsePrice(entry.price);
-    if (price === null) return { error: "Add-on price must be 0 or more" };
-    addons.push({
+      return { error: "Group label is too long" };
+    const required = entry.required === true;
+    const options = parseOptions(entry.options);
+    if (options.error || !options.data) return { error: options.error };
+    const min = parseSelectCount(entry.min, 0);
+    const max = parseSelectCount(entry.max, 1);
+    if (min === null || max === null)
+      return { error: "Invalid min/max selection counts" };
+    const effectiveMin = required ? Math.max(min, 1) : min;
+    if (effectiveMin > max || max > options.data.length)
+      return { error: "Selection counts must fit the options (min ≤ max ≤ options)" };
+    groups.push({
       id: parseOptionId(entry.id) ?? "",
       label: entry.label.trim(),
-      price,
+      min: effectiveMin,
+      max,
+      required,
+      options: options.data,
     });
   }
-  return { data: addons };
+  return { data: groups };
+}
+
+function parseSelectCount(raw: unknown, fallback: number): number | null {
+  if (raw === undefined) return fallback;
+  if (
+    typeof raw !== "number" ||
+    !Number.isInteger(raw) ||
+    raw < 0 ||
+    raw > MAX_OPTIONS
+  )
+    return null;
+  return raw;
 }
 
 export function parseMenuItemInput(body: unknown): ParseResult<MenuItemBody> {
@@ -142,18 +168,11 @@ export function parseMenuItemInput(body: unknown): ParseResult<MenuItemBody> {
     imageUrl = parsed.value;
   }
 
-  let sizes: SizeOption[] | undefined;
-  if (body.sizes !== undefined) {
-    const parsed = parseSizes(body.sizes);
+  let modifierGroups: ModifierGroup[] | undefined;
+  if (body.modifierGroups !== undefined) {
+    const parsed = parseModifierGroups(body.modifierGroups);
     if (parsed.error || !parsed.data) return { error: parsed.error };
-    sizes = parsed.data;
-  }
-
-  let addons: AddOn[] | undefined;
-  if (body.addons !== undefined) {
-    const parsed = parseAddons(body.addons);
-    if (parsed.error || !parsed.data) return { error: parsed.error };
-    addons = parsed.data;
+    modifierGroups = parsed.data;
   }
 
   return {
@@ -166,8 +185,7 @@ export function parseMenuItemInput(body: unknown): ParseResult<MenuItemBody> {
       popular,
       emoji: emoji?.trim() || undefined,
       imageUrl,
-      sizes,
-      addons,
+      modifierGroups,
     },
   };
 }
@@ -223,15 +241,10 @@ export function parseMenuItemPatch(
     // presence as intent, so this still counts as a change.
     patch.imageUrl = parsed.value;
   }
-  if (body.sizes !== undefined) {
-    const parsed = parseSizes(body.sizes);
+  if (body.modifierGroups !== undefined) {
+    const parsed = parseModifierGroups(body.modifierGroups);
     if (parsed.error || !parsed.data) return { error: parsed.error };
-    patch.sizes = parsed.data;
-  }
-  if (body.addons !== undefined) {
-    const parsed = parseAddons(body.addons);
-    if (parsed.error || !parsed.data) return { error: parsed.error };
-    patch.addons = parsed.data;
+    patch.modifierGroups = parsed.data;
   }
 
   if (Object.keys(patch).length === 0) return { error: "Nothing to update" };

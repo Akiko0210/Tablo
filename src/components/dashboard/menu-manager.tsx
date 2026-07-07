@@ -17,7 +17,7 @@ import {
 import type { MenuItemRecord } from "@/lib/menu/store";
 import type { GenerationJob } from "@/lib/menu/generation-store";
 import { validateUploadFile } from "@/lib/uploads/limits";
-import type { AddOn, Category, SizeOption } from "@/lib/types";
+import type { Category, ModifierGroup } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -333,10 +333,10 @@ function GenerationBanner({
   );
 }
 
-// Draft rows for the guest-facing option lists. `key` keeps React list identity
-// stable across edits; `id` preserves an existing option's id (empty for a row
-// the user just added — the store assigns one on save).
-interface SizeDraft {
+// Draft rows for the guest-facing choice groups. `key` keeps React list
+// identity stable across edits; `id` preserves an existing group/option's id
+// (empty for a row the user just added — the store assigns one on save).
+interface OptionDraft {
   key: number;
   id: string;
   label: string;
@@ -344,11 +344,14 @@ interface SizeDraft {
   note: string;
 }
 
-interface AddonDraft {
+interface GroupDraft {
   key: number;
   id: string;
   label: string;
-  price: string;
+  min: string;
+  max: string;
+  required: boolean;
+  options: OptionDraft[];
 }
 
 interface EditorFields {
@@ -357,25 +360,51 @@ interface EditorFields {
   price: string;
   category: string;
   imageUrl: string;
-  sizes: SizeDraft[];
-  addons: AddonDraft[];
+  groups: GroupDraft[];
 }
+
+/** Mirrors MAX_GROUPS in src/lib/menu/validate.ts. */
+const MAX_GROUPS = 6;
 
 let optionKeySeq = 0;
 const nextKey = () => (optionKeySeq += 1);
 
-function sizeDraftFrom(s: SizeOption): SizeDraft {
+function optionDraftFrom(o: ModifierGroup["options"][number]): OptionDraft {
   return {
     key: nextKey(),
-    id: s.id,
-    label: s.label,
-    priceDelta: String(s.priceDelta),
-    note: s.note ?? "",
+    id: o.id,
+    label: o.label,
+    priceDelta: String(o.priceDelta),
+    note: o.note ?? "",
   };
 }
 
-function addonDraftFrom(a: AddOn): AddonDraft {
-  return { key: nextKey(), id: a.id, label: a.label, price: String(a.price) };
+function groupDraftFrom(g: ModifierGroup): GroupDraft {
+  return {
+    key: nextKey(),
+    id: g.id,
+    label: g.label,
+    min: String(g.min),
+    max: String(g.max),
+    required: g.required,
+    options: g.options.map(optionDraftFrom),
+  };
+}
+
+function emptyOptionDraft(): OptionDraft {
+  return { key: nextKey(), id: "", label: "", priceDelta: "0", note: "" };
+}
+
+function emptyGroupDraft(): GroupDraft {
+  return {
+    key: nextKey(),
+    id: "",
+    label: "",
+    min: "0",
+    max: "1",
+    required: false,
+    options: [emptyOptionDraft()],
+  };
 }
 
 function ItemEditorDialog({
@@ -405,8 +434,7 @@ function ItemEditorDialog({
               price: String(item.price),
               category: labelFromCategoryId(item.categoryId),
               imageUrl: item.imageUrl ?? "",
-              sizes: (item.sizes ?? []).map(sizeDraftFrom),
-              addons: (item.addons ?? []).map(addonDraftFrom),
+              groups: (item.modifierGroups ?? []).map(groupDraftFrom),
             }
           : emptyFields(),
       );
@@ -451,16 +479,29 @@ function ItemEditorDialog({
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  function updateSize(key: number, patch: Partial<SizeDraft>) {
+  function updateGroup(key: number, patch: Partial<GroupDraft>) {
     set(
-      "sizes",
-      fields.sizes.map((s) => (s.key === key ? { ...s, ...patch } : s)),
+      "groups",
+      fields.groups.map((g) => (g.key === key ? { ...g, ...patch } : g)),
     );
   }
-  function updateAddon(key: number, patch: Partial<AddonDraft>) {
+  function updateOption(
+    groupKey: number,
+    optionKey: number,
+    patch: Partial<OptionDraft>,
+  ) {
     set(
-      "addons",
-      fields.addons.map((a) => (a.key === key ? { ...a, ...patch } : a)),
+      "groups",
+      fields.groups.map((g) =>
+        g.key === groupKey
+          ? {
+              ...g,
+              options: g.options.map((o) =>
+                o.key === optionKey ? { ...o, ...patch } : o,
+              ),
+            }
+          : g,
+      ),
     );
   }
 
@@ -481,22 +522,32 @@ function ItemEditorDialog({
       category: fields.category,
       // "" clears the photo server-side; a set path swaps it in.
       imageUrl: fields.imageUrl,
-      // Drop unnamed rows, then hand ids back so existing options keep theirs.
-      sizes: fields.sizes
-        .filter((s) => s.label.trim())
-        .map((s) => ({
-          id: s.id || undefined,
-          label: s.label.trim(),
-          priceDelta: Number(s.priceDelta) || 0,
-          note: s.note.trim() || undefined,
-        })),
-      addons: fields.addons
-        .filter((a) => a.label.trim())
-        .map((a) => ({
-          id: a.id || undefined,
-          label: a.label.trim(),
-          price: Number(a.price) || 0,
-        })),
+      // Drop unnamed groups/rows, then hand ids back so existing rows keep
+      // theirs. Min/max are clamped to the surviving option count so the
+      // server's `min ≤ max ≤ options` rule can't trip on stale numbers.
+      modifierGroups: fields.groups
+        .map((g) => ({ ...g, options: g.options.filter((o) => o.label.trim()) }))
+        .filter((g) => g.label.trim() && g.options.length > 0)
+        .map((g) => {
+          const max = Math.min(
+            Math.max(Math.floor(Number(g.max)) || 1, 1),
+            g.options.length,
+          );
+          const min = Math.min(Math.max(Math.floor(Number(g.min)) || 0, 0), max);
+          return {
+            id: g.id || undefined,
+            label: g.label.trim(),
+            min,
+            max,
+            required: g.required,
+            options: g.options.map((o) => ({
+              id: o.id || undefined,
+              label: o.label.trim(),
+              priceDelta: Number(o.priceDelta) || 0,
+              note: o.note.trim() || undefined,
+            })),
+          };
+        }),
     };
     try {
       const res = item
@@ -668,97 +719,130 @@ function ItemEditorDialog({
             />
           </div>
 
-          {/* Sizes — the "Size" choice shown on the guest item sheet. */}
+          {/* Choice groups — sizes, protein, spice level, add-ons… shown on
+              the guest item sheet as radios (max 1) or checkboxes. */}
           <OptionGroup
-            title="Sizes"
-            hint="A required, single-choice list (e.g. Regular / Large)."
-            addLabel="Add size"
+            title="Guest choices"
+            hint="Choice groups like Size, Protein, Spice level, or Add-ons. Single-choice groups show as radios, the rest as checkboxes."
+            addLabel="Add group"
             onAdd={() =>
-              set("sizes", [
-                ...fields.sizes,
-                { key: nextKey(), id: "", label: "", priceDelta: "0", note: "" },
-              ])
+              fields.groups.length < MAX_GROUPS &&
+              set("groups", [...fields.groups, emptyGroupDraft()])
             }
           >
-            {fields.sizes.map((s) => (
+            {fields.groups.map((g) => (
               <div
-                key={s.key}
-                className="rounded-xl border border-border bg-muted/30 p-2.5"
+                key={g.key}
+                className="rounded-xl border border-border bg-muted/30 p-3"
               >
                 <div className="flex items-center gap-2">
                   <Input
-                    value={s.label}
-                    onChange={(e) => updateSize(s.key, { label: e.target.value })}
-                    placeholder='Regular · 12"'
+                    value={g.label}
+                    onChange={(e) => updateGroup(g.key, { label: e.target.value })}
+                    placeholder="Size / Protein / Spice level…"
                     className="h-9 flex-1"
-                    aria-label="Size label"
+                    aria-label="Group label"
                   />
                   <RemoveButton
-                    label="Remove size"
+                    label="Remove group"
                     onClick={() =>
                       set(
-                        "sizes",
-                        fields.sizes.filter((x) => x.key !== s.key),
+                        "groups",
+                        fields.groups.filter((x) => x.key !== g.key),
                       )
                     }
                   />
                 </div>
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <PriceField
-                    prefix="+$"
-                    value={s.priceDelta}
-                    onChange={(v) => updateSize(s.key, { priceDelta: v })}
-                    aria-label="Extra charge for this size"
-                  />
-                  <Input
-                    value={s.note}
-                    onChange={(e) => updateSize(s.key, { note: e.target.value })}
-                    placeholder="Note (e.g. Included)"
-                    className="h-9"
-                    aria-label="Size note"
-                  />
-                </div>
-              </div>
-            ))}
-          </OptionGroup>
 
-          {/* Add-ons — the optional "Add-ons" checklist on the guest sheet. */}
-          <OptionGroup
-            title="Add-ons"
-            hint="Optional extras guests can tick (e.g. Extra mozzarella)."
-            addLabel="Add add-on"
-            onAdd={() =>
-              set("addons", [
-                ...fields.addons,
-                { key: nextKey(), id: "", label: "", price: "0" },
-              ])
-            }
-          >
-            {fields.addons.map((a) => (
-              <div key={a.key} className="flex items-center gap-2">
-                <Input
-                  value={a.label}
-                  onChange={(e) => updateAddon(a.key, { label: e.target.value })}
-                  placeholder="Extra mozzarella"
-                  className="h-9 flex-1"
-                  aria-label="Add-on label"
-                />
-                <PriceField
-                  prefix="+$"
-                  value={a.price}
-                  onChange={(v) => updateAddon(a.key, { price: v })}
-                  className="w-24"
-                  aria-label="Add-on price"
-                />
-                <RemoveButton
-                  label="Remove add-on"
-                  onClick={() =>
-                    set(
-                      "addons",
-                      fields.addons.filter((x) => x.key !== a.key),
-                    )
-                  }
-                />
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <label className="flex items-center gap-2 text-[13px]">
+                    <Switch
+                      checked={g.required}
+                      onCheckedChange={(v) => updateGroup(g.key, { required: v })}
+                      aria-label="Guests must choose from this group"
+                    />
+                    Required
+                  </label>
+                  <label className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+                    Min
+                    <Input
+                      type="number"
+                      min={0}
+                      max={g.options.length}
+                      value={g.min}
+                      onChange={(e) => updateGroup(g.key, { min: e.target.value })}
+                      className="h-8 w-16"
+                      aria-label="Minimum selections"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+                    Max
+                    <Input
+                      type="number"
+                      min={1}
+                      max={g.options.length}
+                      value={g.max}
+                      onChange={(e) => updateGroup(g.key, { max: e.target.value })}
+                      className="h-8 w-16"
+                      aria-label="Maximum selections"
+                    />
+                  </label>
+                </div>
+
+                <div className="mt-2.5 flex flex-col gap-2">
+                  {g.options.map((o) => (
+                    <div key={o.key} className="flex items-center gap-2">
+                      <Input
+                        value={o.label}
+                        onChange={(e) =>
+                          updateOption(g.key, o.key, { label: e.target.value })
+                        }
+                        placeholder="Option (e.g. Chicken)"
+                        className="h-9 flex-1"
+                        aria-label="Option label"
+                      />
+                      <PriceField
+                        prefix="+$"
+                        value={o.priceDelta}
+                        onChange={(v) =>
+                          updateOption(g.key, o.key, { priceDelta: v })
+                        }
+                        className="w-24"
+                        aria-label="Extra charge for this option"
+                      />
+                      <Input
+                        value={o.note}
+                        onChange={(e) =>
+                          updateOption(g.key, o.key, { note: e.target.value })
+                        }
+                        placeholder="Note"
+                        className="h-9 w-24"
+                        aria-label="Option note"
+                      />
+                      <RemoveButton
+                        label="Remove option"
+                        onClick={() =>
+                          updateGroup(g.key, {
+                            options: g.options.filter((x) => x.key !== o.key),
+                          })
+                        }
+                      />
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="self-start"
+                    onClick={() =>
+                      updateGroup(g.key, {
+                        options: [...g.options, emptyOptionDraft()],
+                      })
+                    }
+                  >
+                    <Plus className="size-3.5" /> Add option
+                  </Button>
+                </div>
               </div>
             ))}
           </OptionGroup>
@@ -879,7 +963,6 @@ function emptyFields(): EditorFields {
     price: "",
     category: "",
     imageUrl: "",
-    sizes: [],
-    addons: [],
+    groups: [],
   };
 }

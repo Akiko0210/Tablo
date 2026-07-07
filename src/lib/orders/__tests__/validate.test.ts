@@ -3,15 +3,12 @@ import { parseNewOrder } from "../validate";
 
 const valid = {
   table: "7",
-  subtotal: 42,
   kitchenNote: "  nut allergy  ",
   lines: [
     {
-      name: "Margherita",
+      itemId: "margherita",
       quantity: 2,
-      unitPrice: 21,
-      sizeLabel: 'Large · 16"',
-      addonLabels: ["Extra mozzarella"],
+      optionIds: ["lg", "mozz"],
       note: "well done",
     },
   ],
@@ -23,7 +20,12 @@ describe("parseNewOrder", () => {
     expect(parsed).not.toBeNull();
     expect(parsed!.table).toBe("7");
     expect(parsed!.kitchenNote).toBe("nut allergy");
-    expect(parsed!.lines[0].quantity).toBe(2);
+    expect(parsed!.lines[0]).toEqual({
+      itemId: "margherita",
+      quantity: 2,
+      optionIds: ["lg", "mozz"],
+      note: "well done",
+    });
   });
 
   it("rejects non-objects", () => {
@@ -40,26 +42,46 @@ describe("parseNewOrder", () => {
     expect(parseNewOrder({ ...valid, lines: [] })).toBeNull();
   });
 
-  it("rejects lines with bad quantity or price", () => {
+  it("rejects lines with a bad itemId or quantity", () => {
     expect(
-      parseNewOrder({
-        ...valid,
-        lines: [{ name: "X", quantity: 0, unitPrice: 5, addonLabels: [] }],
-      }),
+      parseNewOrder({ ...valid, lines: [{ itemId: "", quantity: 1 }] }),
     ).toBeNull();
     expect(
+      parseNewOrder({ ...valid, lines: [{ itemId: "x", quantity: 0 }] }),
+    ).toBeNull();
+    expect(
+      parseNewOrder({ ...valid, lines: [{ itemId: "x", quantity: 100 }] }),
+    ).toBeNull();
+  });
+
+  it("floors fractional quantities", () => {
+    const parsed = parseNewOrder({
+      ...valid,
+      lines: [{ itemId: "x", quantity: 2.9 }],
+    });
+    expect(parsed!.lines[0].quantity).toBe(2);
+  });
+
+  it("defaults optionIds to an empty array and rejects non-string ids", () => {
+    const parsed = parseNewOrder({
+      ...valid,
+      lines: [{ itemId: "espresso", quantity: 1 }],
+    });
+    expect(parsed!.lines[0].optionIds).toEqual([]);
+    expect(
       parseNewOrder({
         ...valid,
-        lines: [{ name: "X", quantity: 1, unitPrice: -5, addonLabels: [] }],
+        lines: [{ itemId: "x", quantity: 1, optionIds: [1] }],
       }),
     ).toBeNull();
   });
 
-  it("defaults addonLabels to an empty array", () => {
+  it("never accepts client-supplied prices (they're simply ignored)", () => {
     const parsed = parseNewOrder({
       ...valid,
-      lines: [{ name: "Espresso", quantity: 1, unitPrice: 3 }],
+      subtotal: 0.01,
+      lines: [{ itemId: "x", quantity: 1, unitPrice: 0.01 }],
     });
-    expect(parsed!.lines[0].addonLabels).toEqual([]);
+    expect(parsed!.lines[0]).not.toHaveProperty("unitPrice");
   });
 });

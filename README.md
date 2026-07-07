@@ -12,13 +12,24 @@ orange accent (`#F67522`), Inter, 12px radius.
 
 ## Getting started
 
+Tablo stores everything in **Postgres via Prisma**. For local dev, run
+Postgres in Docker and point `DATABASE_URL` at it (see `.env.example`):
+
 ```bash
+docker run -d --name tablo-postgres -p 5432:5432 \
+  -e POSTGRES_USER=tablo -e POSTGRES_PASSWORD=tablo -e POSTGRES_DB=tablo \
+  postgres:16
+
 npm install
-npm run dev          # http://localhost:3000
+cp .env.example .env          # then fill in DATABASE_URL (and optional keys)
+npx prisma migrate dev        # create the schema
+npx prisma db seed            # demo account + Bella Trattoria
+npm run dev                   # http://localhost:3000
 ```
 
 Optional: set `ANTHROPIC_API_KEY` (or run `ant auth login`) so the AI
-photo → menu generation works; everything else runs with zero config.
+photo → menu generation works. Without `RESEND_API_KEY` emails are logged to
+the console; without `R2_*` vars upload bytes stay in Postgres.
 
 **Demo account:** `sofia@bella.com` / `tablo123` (prefilled on the login
 form) — owns the seeded demo restaurant *Bella Trattoria* (slug `bella`,
@@ -69,12 +80,18 @@ All `/dashboard/*` pages require a staff session (the layout redirects to
 | `/api/workers`              | GET/POST     | staff   | Worker profiles + presence / add worker.       |
 | `/api/workers/[id]`         | PATCH/DELETE | staff   | Edit / remove a worker.                        |
 | `/api/kitchen/session`      | GET/POST/DELETE | device | Kitchen-code sign-in for the shared device.  |
-| `/api/kitchen/workers`      | GET          | kitchen | Presence list for the clock screen (no PINs).  |
-| `/api/kitchen/clock`        | POST         | kitchen | Clock in/out (`workerId` + 4-digit PIN).       |
+| `/api/kitchen/clock`        | POST         | kitchen | Clock in/out with the 4-digit PIN alone (the server resolves the worker; no roster is ever sent to the device). |
 | `/api/kitchen/orders[/[id]]`| GET/PATCH    | kitchen | Live queue / advance an order.                 |
-| `/api/auth/login|logout|signup` | POST     | public  | Session management.                            |
-| `/api/uploads[/[id]]`       | GET/POST/DELETE | staff (GET by id public) | Menu photos.            |
+| `/api/auth/login|logout|signup` | POST     | public  | Session management (DB-backed, revocable sessions). |
+| `/api/auth/forgot-password|reset-password` | POST | public | Password reset (hashed single-use tokens; reset revokes all sessions). |
+| `/api/auth/verify-email`    | GET/POST     | public  | Email verification links.                      |
+| `/api/uploads[/[id]]`       | GET/POST/DELETE | staff (GET by id public) | Menu photos (R2 or Postgres). |
 | `/api/account/profile`      | PATCH        | staff   | Finish onboarding (also fires AI generation).  |
+| `/api/export/orders`        | GET          | staff   | CSV of order lines (`?from&to&includeSeeded=1`), streamed. |
+| `/api/export/analytics`     | GET          | staff   | CSV reports: `?report=daily` or `?report=items`. |
+
+All auth-adjacent and guest-facing endpoints are rate-limited
+(Postgres-backed fixed window, [`src/lib/rate-limit.ts`](src/lib/rate-limit.ts)).
 
 ## AI menu generation (photos → menu items)
 
@@ -91,10 +108,10 @@ items can be added by hand.
 
 ## Analysis
 
-**Dashboard → Analysis** is built around one **revenue + orders explorer**
+**Dashboard → Analysis** is built around one **explorer chart**
 ([`revenue-explorer.tsx`](src/components/dashboard/revenue-explorer.tsx)):
 
-- Toggle the metric between **Revenue** and **Orders**.
+- Toggle the metric between **Revenue / Orders / Avg order / Items-per-order**.
 - Toggle the granularity between **Day / Week / Month / Year**, and step
   through time with the ‹ › range navigator — Day shows one calendar day by
   hour (next → the next day), Week shows Mon–Sun, Month shows every day of the
@@ -112,11 +129,19 @@ selling low for a month (“maybe change the menu”), rising stars, dishes that
 never sell, strongest day, weekend lift, peak hour — followed by a per-item
 performance table (orders, revenue, trend vs the previous 28 days).
 
-So the page is meaningful from day one, each restaurant gets roughly a year of
-deterministic sample sales history generated from its own menu
-([`src/lib/analysis/seed-history.ts`](src/lib/analysis/seed-history.ts)) the
-first time Analysis is opened; real served orders fold into the same numbers.
-Sample history never appears on the live orders board.
+The suggestions are **volume-aware**: with under ~30 orders or a week of
+history the strip shows a single "insights unlock as orders come in" note;
+under ~200 orders thresholds widen and whatever fires renders muted as
+"based on limited data". Baselines scale with order volume, item trends need
+sales on 3+ distinct days, and day-of-week claims need at least two weekend
+days of data.
+
+**Sample history is demo-only.** The seeded Bella Trattoria gets roughly a
+year of deterministic sample sales generated from its menu
+([`src/lib/analysis/seed-history.ts`](src/lib/analysis/seed-history.ts)) on
+first Analysis visit; real restaurants start empty and rely on the guards
+above. Sample history never appears on the live orders board, and CSV exports
+exclude it unless `includeSeeded=1`.
 
 ## Team & the kitchen app
 
@@ -126,11 +151,13 @@ worked today.
 
 **`/kitchen`** is the separate app for kitchen staff, meant for a shared
 tablet: sign the device in once with the restaurant's **kitchen code** (shown
-on Team/Settings), then workers tap their name and enter their PIN to clock
-in/out, and the **Orders** tab is a live queue where they advance orders
-(New → Preparing → Ready → Served). Device auth is a separate short-lived
-cookie ([`src/lib/kitchen/session.ts`](src/lib/kitchen/session.ts)); PINs are
-checked per action and never sent to the kitchen client.
+on the Team page), then workers clock in/out on a **PIN keypad** — the server
+resolves who the PIN belongs to, so the device never sees the roster or any
+worker PII. The **Orders** tab is a live queue where they advance orders
+(New → Preparing → Ready → Served); waiting orders escalate visually (amber
+at 10 minutes, red at 20). Device auth is a separate short-lived cookie
+([`src/lib/kitchen/session.ts`](src/lib/kitchen/session.ts)); PINs are
+scrypt-hashed, unique per restaurant, and rate-limited.
 
 ## Menu scanning
 
@@ -142,44 +169,67 @@ run `npm run dev`, open `http://<LAN-IP>:3000/dashboard/qr`, scan a code.
 ## The ordering flow (`/m/[restaurant]/[table]`)
 
 1. **Browse** — search, category chips, dietary tags, live sold-out state.
-2. **Item detail** — sizes, add-ons, special requests, quantity; live price.
+2. **Item detail** — cuisine-flexible **choice groups** (sizes, protein,
+   spice level, add-ons…) rendered as radios or checkboxes with min/max
+   enforcement, special requests, quantity; live price.
 3. **Order review** — editable cart, per-line notes, kitchen note, totals.
 4. **Confirmation & feedback** — star rating + quick feedback, loyalty
    prompt, reorder. Payment is handled separately (at the table), so the flow
    ends at “Send order to kitchen”.
+
+Orders are **priced server-side**: the guest sends item + option ids only,
+and the server validates selections against the live menu and recomputes
+every price ([`src/lib/orders/price.ts`](src/lib/orders/price.ts)).
 
 Menu edits in the dashboard (price, sold-out, new items) appear on guests'
 menus on the next page load.
 
 ### Auth
 
-Two account sources, unified by
-[`src/lib/auth/directory.ts`](src/lib/auth/directory.ts): the seeded demo
-user (plaintext password, mock login) and `/signup` accounts (scrypt-hashed).
-Login issues a signed (`jose`/HS256) httpOnly session cookie; every staff
-route resolves the session **and its restaurant** via `getStaffContext()` so
-all reads/writes are tenant-scoped. Set `AUTH_SECRET` in production.
+Accounts are Postgres rows with **scrypt-hashed passwords** (the demo account
+included). Login issues an opaque token in an httpOnly cookie whose SHA-256
+hash lives in the Session table — sliding 7-day expiry, revocable
+([`src/lib/auth/session.ts`](src/lib/auth/session.ts)); password reset
+revokes every session. Signup sends an email-verification link (Resend, or
+console in dev). Every staff route resolves the session **and its
+restaurant** via `getStaffContext()` so all reads/writes are tenant-scoped.
+`AUTH_SECRET` is required in production — both session modules fail fast at
+boot without it.
 
 ### Storage
 
-All stores (restaurants, menu items, orders, workers/time entries, uploads,
-accounts) are in-memory and survive dev HMR via `globalThis` — data persists
-while the server runs and resets on restart. Each store is a single file, so
-swapping in SQLite/Postgres is localized.
+Everything lives in **Postgres via Prisma**
+([`prisma/schema.prisma`](prisma/schema.prisma)); the store modules under
+`src/lib/*/store.ts` keep their original names/shapes, just async. Upload
+bytes go to **Cloudflare R2** when the `R2_*` env vars are set (the
+`/api/uploads/[id]` URL 307-redirects to the bucket), with a zero-config
+Postgres fallback for dev.
 
 ## Testing
 
 ```bash
-npm run test         # Vitest — 204 unit + component tests
+npm run test         # Vitest unit + component tests
 npm run lint         # ESLint
 npm run build        # Type-check + production build
 ```
 
-Tests cover cart math, money/URL formatting, menu queries and validation,
-the restaurant registry (slugs, kitchen codes), tenant-scoped order and menu
-stores, analysis stats + the explorer's period bucketing/navigation
-(`series.ts`) + insights + deterministic history seeding, worker time math /
-store / validation, and the auth/signup layer.
+Tests cover cart math, server-side order pricing, money/URL/CSV formatting,
+menu queries and validation (incl. modifier groups), the restaurant registry
+(slugs, kitchen codes), analysis stats + the explorer's period
+bucketing/navigation (`series.ts`) + volume-aware insights + deterministic
+history seeding, worker time math / validation, and the auth/signup layer.
+
+## Deploying (Vercel + Neon + R2 + Resend)
+
+1. Create a Postgres database (e.g. Neon) and set `DATABASE_URL` (pooled URL).
+2. Set the environment variables — see [`.env.example`](.env.example):
+   `AUTH_SECRET` (required), `ANTHROPIC_API_KEY`, `RESEND_API_KEY`,
+   `EMAIL_FROM`, `APP_URL`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+   `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_URL`.
+3. Run `npx prisma migrate deploy` on release (Prisma Client is generated by
+   the `postinstall` hook).
+4. Seed (`npx prisma db seed`) **only** on demo environments — it creates the
+   demo account and restaurant.
 
 ## Project structure
 

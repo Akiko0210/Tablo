@@ -14,9 +14,12 @@ const base = {
   name: "Margherita",
   quantity: 1,
   unitPrice: 14,
-  addonIds: [] as string[],
-  addonLabels: [] as string[],
+  optionIds: [] as string[],
+  optionLabels: [] as string[],
 };
+
+const regular = { optionIds: ["reg"], optionLabels: ['Regular · 12"'] };
+const large = { optionIds: ["lg"], optionLabels: ['Large · 16"'] };
 
 describe("cart reducer via context", () => {
   it("starts empty", () => {
@@ -26,8 +29,8 @@ describe("cart reducer via context", () => {
 
   it("merges identical configurations into one line", () => {
     const { result } = setup();
-    act(() => result.current.add({ ...base, sizeId: "reg" }));
-    act(() => result.current.add({ ...base, sizeId: "reg", quantity: 2 }));
+    act(() => result.current.add({ ...base, ...regular }));
+    act(() => result.current.add({ ...base, ...regular, quantity: 2 }));
 
     expect(result.current.lines).toHaveLength(1);
     expect(result.current.lines[0].quantity).toBe(3);
@@ -37,14 +40,13 @@ describe("cart reducer via context", () => {
 
   it("keeps different configurations as separate lines", () => {
     const { result } = setup();
-    act(() => result.current.add({ ...base, sizeId: "reg" }));
+    act(() => result.current.add({ ...base, ...regular }));
     act(() =>
       result.current.add({
         ...base,
-        sizeId: "lg",
-        unitPrice: 18,
-        addonIds: ["mozz"],
-        addonLabels: ["Extra mozzarella"],
+        unitPrice: 21,
+        optionIds: ["lg", "mozz"],
+        optionLabels: ['Large · 16"', "Extra mozzarella"],
       }),
     );
     expect(result.current.lines).toHaveLength(2);
@@ -52,7 +54,7 @@ describe("cart reducer via context", () => {
 
   it("removes a line when quantity drops to zero", () => {
     const { result } = setup();
-    act(() => result.current.add({ ...base, sizeId: "reg" }));
+    act(() => result.current.add({ ...base, ...regular }));
     const id = result.current.lines[0].lineId;
     act(() => result.current.setQuantity(id, 0));
     expect(result.current.lines).toHaveLength(0);
@@ -60,7 +62,7 @@ describe("cart reducer via context", () => {
 
   it("updates a line note", () => {
     const { result } = setup();
-    act(() => result.current.add({ ...base, sizeId: "reg" }));
+    act(() => result.current.add({ ...base, ...regular }));
     const id = result.current.lines[0].lineId;
     act(() => result.current.setNote(id, "  extra crispy  "));
     expect(result.current.lines[0].note).toBe("extra crispy");
@@ -68,8 +70,8 @@ describe("cart reducer via context", () => {
 
   it("clears the whole cart", () => {
     const { result } = setup();
-    act(() => result.current.add({ ...base, sizeId: "reg" }));
-    act(() => result.current.add({ ...base, sizeId: "lg", unitPrice: 18 }));
+    act(() => result.current.add({ ...base, ...regular }));
+    act(() => result.current.add({ ...base, ...large, unitPrice: 18 }));
     act(() => result.current.clear());
     expect(result.current.lines).toHaveLength(0);
   });

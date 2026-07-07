@@ -32,6 +32,78 @@ describe("parseMenuItemInput", () => {
   });
 });
 
+describe("modifier groups", () => {
+  const group = (over: object = {}) => ({
+    label: "Protein",
+    min: 1,
+    max: 1,
+    required: true,
+    options: [
+      { label: "Chicken", priceDelta: 0 },
+      { label: "Beef", priceDelta: 3 },
+    ],
+    ...over,
+  });
+  const withGroups = (groups: unknown) => ({ ...valid, modifierGroups: groups });
+
+  it("accepts a valid group and defaults missing option ids to ''", () => {
+    const parsed = parseMenuItemInput(withGroups([group()]));
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.data!.modifierGroups![0]).toMatchObject({
+      id: "",
+      label: "Protein",
+      min: 1,
+      max: 1,
+      required: true,
+    });
+    expect(parsed.data!.modifierGroups![0].options[1]).toMatchObject({
+      id: "",
+      label: "Beef",
+      priceDelta: 3,
+    });
+  });
+
+  it("bumps a required group's min to 1", () => {
+    const parsed = parseMenuItemInput(withGroups([group({ min: 0 })]));
+    expect(parsed.data!.modifierGroups![0].min).toBe(1);
+  });
+
+  it("enforces min ≤ max ≤ option count", () => {
+    expect(parseMenuItemInput(withGroups([group({ min: 2 })])).error).toBeTruthy();
+    expect(parseMenuItemInput(withGroups([group({ max: 3 })])).error).toBeTruthy();
+    expect(
+      parseMenuItemInput(withGroups([group({ min: 1, max: 2 })])).data,
+    ).toBeTruthy();
+  });
+
+  it("rejects empty groups, unlabeled rows, and negative deltas", () => {
+    expect(parseMenuItemInput(withGroups([group({ options: [] })])).error).toBeTruthy();
+    expect(parseMenuItemInput(withGroups([group({ label: " " })])).error).toBeTruthy();
+    expect(
+      parseMenuItemInput(
+        withGroups([group({ options: [{ label: "", priceDelta: 0 }] })]),
+      ).error,
+    ).toBeTruthy();
+    expect(
+      parseMenuItemInput(
+        withGroups([group({ options: [{ label: "X", priceDelta: -1 }] })]),
+      ).error,
+    ).toBeTruthy();
+  });
+
+  it("caps the number of groups at 6", () => {
+    expect(
+      parseMenuItemInput(withGroups(Array.from({ length: 7 }, () => group())))
+        .error,
+    ).toBeTruthy();
+  });
+
+  it("accepts groups in a patch too", () => {
+    const parsed = parseMenuItemPatch({ modifierGroups: [group()] });
+    expect(parsed.data!.modifierGroups).toHaveLength(1);
+  });
+});
+
 describe("parseMenuItemPatch", () => {
   it("accepts partial updates", () => {
     expect(parseMenuItemPatch({ soldOut: true }).data).toEqual({ soldOut: true });

@@ -9,25 +9,58 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { statusMeta } from "./order-status";
 
+/** Kitchen timer escalation: quiet → amber at 10 min → red at 20 min. */
+const AMBER_AFTER_MS = 10 * 60_000;
+const RED_AFTER_MS = 20 * 60_000;
+
 export function OrderCard({
   order,
   onAdvance,
+  now,
+  escalate = false,
 }: {
   order: Order;
   onAdvance: (id: string, status: OrderStatus) => void;
+  /** Ticking clock from useNow() so elapsed labels update live. */
+  now: number;
+  /** Kitchen mode: color the card by how long the order has been waiting. */
+  escalate?: boolean;
 }) {
   const meta = statusMeta[order.status];
+  const waitedMs = now - new Date(order.createdAt).getTime();
+  const level =
+    !escalate || order.status === "served"
+      ? "none"
+      : waitedMs >= RED_AFTER_MS
+        ? "red"
+        : waitedMs >= AMBER_AFTER_MS
+          ? "amber"
+          : "none";
 
   return (
-    <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm">
+    <div
+      className={cn(
+        "rounded-xl border bg-card p-3.5 shadow-sm",
+        level === "none" && "border-border",
+        level === "amber" && "border-amber-400/70 bg-amber-50/40",
+        level === "red" && "border-red-400/80 bg-red-50/40",
+      )}
+    >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-sm font-bold">Table {order.table}</span>
           <Badge className={cn("border", meta.badge)}>{meta.label}</Badge>
         </div>
-        <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+        <span
+          className={cn(
+            "flex items-center gap-1 text-[11px]",
+            level === "none" && "text-muted-foreground",
+            level === "amber" && "font-semibold text-amber-700",
+            level === "red" && "font-semibold text-red-700",
+          )}
+        >
           <Clock className="size-3" />
-          {timeAgo(order.createdAt)}
+          {timeAgo(order.createdAt, now)}
         </span>
       </div>
 
@@ -45,9 +78,9 @@ export function OrderCard({
                 {formatMoney(line.unitPrice * line.quantity)}
               </span>
             </div>
-            {(line.sizeLabel || line.addonLabels.length > 0) && (
+            {line.optionLabels.length > 0 && (
               <div className="text-[11px] text-muted-foreground">
-                {[line.sizeLabel, ...line.addonLabels].filter(Boolean).join(" · ")}
+                {line.optionLabels.join(" · ")}
               </div>
             )}
             {line.note && (

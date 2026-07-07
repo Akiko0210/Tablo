@@ -31,7 +31,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid status" }, { status: 400 });
   }
 
-  const order = updateOrderStatus(ctx.restaurant.id, id, status as OrderStatus);
+  const order = await updateOrderStatus(ctx.restaurant.id, id, status as OrderStatus);
   if (!order) {
     return NextResponse.json({ error: "Order not found" }, { status: 404 });
   }

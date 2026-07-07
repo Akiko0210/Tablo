@@ -30,7 +30,7 @@ import {
   type SalesEvent,
 } from "@/lib/analysis/series";
 
-type Metric = "revenue" | "orders";
+type Metric = "revenue" | "orders" | "avgOrder" | "itemsPerOrder";
 
 const GRANULARITY_LABELS: Record<Granularity, string> = {
   day: "Day",
@@ -51,7 +51,16 @@ const CHART_KIND: Record<Granularity, "bar" | "area"> = {
 const chartConfig = {
   revenue: { label: "Revenue", color: "var(--brand)" },
   orders: { label: "Orders", color: "var(--brand)" },
+  avgOrder: { label: "Avg order", color: "var(--brand)" },
+  itemsPerOrder: { label: "Items / order", color: "var(--brand)" },
 } satisfies ChartConfig;
+
+const METRIC_OPTIONS: { value: Metric; label: string }[] = [
+  { value: "revenue", label: "Revenue" },
+  { value: "orders", label: "Orders" },
+  { value: "avgOrder", label: "Avg order" },
+  { value: "itemsPerOrder", label: "Items/order" },
+];
 
 export function RevenueExplorer({
   events,
@@ -92,18 +101,37 @@ export function RevenueExplorer({
     setAnchorMs(shiftPeriod(anchor, granularity, dir).getTime());
   }
 
-  const total = metric === "revenue" ? series.totalRevenue : series.totalOrders;
-  const prevTotal =
-    metric === "revenue" ? prevSeries.totalRevenue : prevSeries.totalOrders;
+  const metricTotal = (s: typeof series): number => {
+    switch (metric) {
+      case "revenue":
+        return s.totalRevenue;
+      case "orders":
+        return s.totalOrders;
+      case "avgOrder":
+        return s.avgOrder;
+      case "itemsPerOrder":
+        return s.avgItems;
+    }
+  };
+  const total = metricTotal(series);
+  const prevTotal = metricTotal(prevSeries);
   const trendPct =
     prevTotal === 0 ? null : Math.round(((total - prevTotal) / prevTotal) * 100);
 
   const headlineValue =
-    metric === "revenue" ? formatMoney(series.totalRevenue) : String(series.totalOrders);
+    metric === "revenue" || metric === "avgOrder"
+      ? formatMoney(total)
+      : metric === "itemsPerOrder"
+        ? total.toFixed(1)
+        : String(total);
   const secondary =
     metric === "revenue"
       ? `${series.totalOrders} orders · ${formatMoney(series.avgOrder)} avg`
-      : `${formatMoney(series.totalRevenue)} · ${formatMoney(series.avgOrder)} avg`;
+      : metric === "orders"
+        ? `${formatMoney(series.totalRevenue)} · ${formatMoney(series.avgOrder)} avg`
+        : metric === "avgOrder"
+          ? `${series.totalOrders} orders · ${formatMoney(series.totalRevenue)} total`
+          : `${series.totalItems} items across ${series.totalOrders} orders`;
 
   return (
     <div className="rounded-2xl border border-border bg-card p-4 sm:p-5">
@@ -115,10 +143,7 @@ export function RevenueExplorer({
           onChange={(v) => changeGranularity(v as Granularity)}
         />
         <SegmentedControl
-          options={[
-            { value: "revenue", label: "Revenue" },
-            { value: "orders", label: "Orders" },
-          ]}
+          options={METRIC_OPTIONS}
           value={metric}
           onChange={(v) => setMetric(v as Metric)}
         />
@@ -202,7 +227,13 @@ function ExplorerChart({
   kind,
   granularity,
 }: {
-  points: { label: string; revenue: number; orders: number }[];
+  points: {
+    label: string;
+    revenue: number;
+    orders: number;
+    avgOrder: number;
+    itemsPerOrder: number;
+  }[];
   metric: Metric;
   kind: "bar" | "area";
   granularity: Granularity;
@@ -211,19 +242,20 @@ function ExplorerChart({
   const interval =
     granularity === "month" ? 2 : granularity === "day" ? 2 : 0;
 
+  const isMoney = metric === "revenue" || metric === "avgOrder";
   const yTickFormatter = (v: number) =>
-    metric === "revenue"
-      ? `$${v >= 1000 ? `${Math.round(v / 100) / 10}k` : v}`
-      : String(v);
+    isMoney ? `$${v >= 1000 ? `${Math.round(v / 100) / 10}k` : v}` : String(v);
 
   const tooltip = (
     <ChartTooltip
       content={
         <ChartTooltipContent
           formatter={(value) =>
-            metric === "revenue"
+            isMoney
               ? `$${Number(value).toLocaleString()}`
-              : `${value} order${Number(value) === 1 ? "" : "s"}`
+              : metric === "orders"
+                ? `${value} order${Number(value) === 1 ? "" : "s"}`
+                : `${value} items/order`
           }
         />
       }

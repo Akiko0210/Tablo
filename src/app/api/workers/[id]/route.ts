@@ -29,9 +29,12 @@ export async function PATCH(
     );
   }
 
-  const worker = updateWorker(ctx.restaurant.id, id, parsed.data);
+  const worker = await updateWorker(ctx.restaurant.id, id, parsed.data);
   if (!worker) {
     return NextResponse.json({ error: "Worker not found" }, { status: 404 });
+  }
+  if ("error" in worker) {
+    return NextResponse.json({ error: worker.error }, { status: 409 });
   }
   return NextResponse.json({ worker });
 }
@@ -47,7 +50,7 @@ export async function DELETE(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const { id } = await params;
-  const ok = deleteWorker(ctx.restaurant.id, id);
+  const ok = await deleteWorker(ctx.restaurant.id, id);
   if (!ok) {
     return NextResponse.json({ error: "Worker not found" }, { status: 404 });
   }

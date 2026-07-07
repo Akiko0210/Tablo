@@ -1,12 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   unitPriceFor,
+  selectedOptionsFor,
   lineTotal,
   cartSubtotal,
   cartItemCount,
   buildLineId,
 } from "../cart";
-import type { CartLine, MenuItem, SizeOption } from "../types";
+import type { CartLine, MenuItem } from "../types";
 
 const pizza: MenuItem = {
   id: "margherita",
@@ -15,25 +16,56 @@ const pizza: MenuItem = {
   price: 14,
   categoryId: "pizza",
   tags: [],
-  sizes: [
-    { id: "reg", label: "Regular", priceDelta: 0 },
-    { id: "lg", label: "Large", priceDelta: 4 },
-  ],
-  addons: [
-    { id: "mozz", label: "Extra mozzarella", price: 3 },
-    { id: "truffle", label: "Truffle", price: 2 },
+  modifierGroups: [
+    {
+      id: "size",
+      label: "Size",
+      min: 1,
+      max: 1,
+      required: true,
+      options: [
+        { id: "reg", label: "Regular", priceDelta: 0 },
+        { id: "lg", label: "Large", priceDelta: 4 },
+      ],
+    },
+    {
+      id: "addons",
+      label: "Add-ons",
+      min: 0,
+      max: 2,
+      required: false,
+      options: [
+        { id: "mozz", label: "Extra mozzarella", priceDelta: 3 },
+        { id: "truffle", label: "Truffle", priceDelta: 2 },
+      ],
+    },
   ],
 };
 
-const large: SizeOption = pizza.sizes![1];
-
 describe("unitPriceFor", () => {
-  it("uses the base price with no size or add-ons", () => {
-    expect(unitPriceFor(pizza, undefined, [])).toBe(14);
+  it("uses the base price with no selections", () => {
+    expect(unitPriceFor(pizza, [])).toBe(14);
   });
 
-  it("adds the size delta and every add-on", () => {
-    expect(unitPriceFor(pizza, large, pizza.addons!)).toBe(14 + 4 + 3 + 2);
+  it("adds every selected option's delta", () => {
+    const selected = selectedOptionsFor(pizza, ["lg", "mozz", "truffle"]);
+    expect(unitPriceFor(pizza, selected)).toBe(14 + 4 + 3 + 2);
+  });
+});
+
+describe("selectedOptionsFor", () => {
+  it("resolves ids to options in menu order", () => {
+    const selected = selectedOptionsFor(pizza, ["truffle", "lg"]);
+    expect(selected.map((o) => o.id)).toEqual(["lg", "truffle"]);
+  });
+
+  it("drops ids that don't belong to the item", () => {
+    expect(selectedOptionsFor(pizza, ["nope"])).toEqual([]);
+  });
+
+  it("is empty for an item without groups", () => {
+    expect(selectedOptionsFor({ ...pizza, modifierGroups: undefined }, ["lg"]))
+      .toEqual([]);
   });
 });
 
@@ -44,7 +76,8 @@ function line(partial: Partial<CartLine>): CartLine {
     name: "Margherita",
     quantity: 1,
     unitPrice: 14,
-    addonLabels: [],
+    optionIds: [],
+    optionLabels: [],
     ...partial,
   };
 }
@@ -77,21 +110,18 @@ describe("line + cart totals", () => {
 });
 
 describe("buildLineId", () => {
-  it("is stable regardless of add-on order", () => {
-    expect(buildLineId("margherita", "lg", ["mozz", "truffle"])).toBe(
-      buildLineId("margherita", "lg", ["truffle", "mozz"]),
+  it("is stable regardless of option order", () => {
+    expect(buildLineId("margherita", ["lg", "mozz", "truffle"])).toBe(
+      buildLineId("margherita", ["truffle", "mozz", "lg"]),
     );
   });
 
-  it("differs when the size differs", () => {
-    expect(buildLineId("margherita", "reg", [])).not.toBe(
-      buildLineId("margherita", "lg", []),
+  it("differs when the options differ", () => {
+    expect(buildLineId("margherita", ["reg"])).not.toBe(
+      buildLineId("margherita", ["lg"]),
     );
-  });
-
-  it("differs when add-ons differ", () => {
-    expect(buildLineId("margherita", "reg", ["mozz"])).not.toBe(
-      buildLineId("margherita", "reg", []),
+    expect(buildLineId("margherita", ["reg", "mozz"])).not.toBe(
+      buildLineId("margherita", ["reg"]),
     );
   });
 });

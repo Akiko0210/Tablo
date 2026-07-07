@@ -1,9 +1,14 @@
-// Worker registry + time clock, scoped per restaurant. Managers maintain
-// profiles in the dashboard; workers clock in/out from the kitchen app with
-// their 4-digit PIN. Same globalThis/HMR pattern as the other stores.
+// Worker registry + time clock, scoped per restaurant, backed by Postgres via
+// Prisma. Managers maintain profiles in the dashboard; workers clock in/out
+// from the kitchen app with their 4-digit PIN.
 
 import crypto from "node:crypto";
-import { DEMO_RESTAURANT_ID } from "@/lib/restaurants/store";
+import type {
+  TimeEntry as TimeEntryRow,
+  Worker as WorkerRow,
+} from "@prisma/client";
+import { prisma } from "@/lib/db";
+import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { minutesToday } from "./time";
 
 export interface Worker {
@@ -13,8 +18,6 @@ export interface Worker {
   role: string;
   phone?: string;
   email?: string;
-  /** 4-digit clock-in PIN. Plaintext is fine for a demo time clock. */
-  pin: string;
   createdAt: string;
 }
 
@@ -26,92 +29,46 @@ export interface TimeEntry {
   clockOut?: string;
 }
 
-interface WorkerStore {
-  workers: Worker[];
-  entries: TimeEntry[];
+function toWorker(row: WorkerRow): Worker {
+  return {
+    id: row.id,
+    restaurantId: row.restaurantId,
+    name: row.name,
+    role: row.role,
+    phone: row.phone ?? undefined,
+    email: row.email ?? undefined,
+    createdAt: row.createdAt.toISOString(),
+  };
 }
 
-const globalForWorkers = globalThis as unknown as {
-  __tabloWorkerStore?: WorkerStore;
-};
-
-function seed(): WorkerStore {
-  const now = Date.now();
-  const iso = (msAgo: number) => new Date(now - msAgo).toISOString();
-  const workers: Worker[] = [
-    {
-      id: "w_marco",
-      restaurantId: DEMO_RESTAURANT_ID,
-      name: "Marco Rinaldi",
-      role: "Head chef",
-      phone: "(555) 010-2233",
-      email: "marco@bella.com",
-      pin: "1111",
-      createdAt: new Date(0).toISOString(),
-    },
-    {
-      id: "w_elena",
-      restaurantId: DEMO_RESTAURANT_ID,
-      name: "Elena Moretti",
-      role: "Server",
-      phone: "(555) 010-4455",
-      email: "elena@bella.com",
-      pin: "2222",
-      createdAt: new Date(0).toISOString(),
-    },
-    {
-      id: "w_luca",
-      restaurantId: DEMO_RESTAURANT_ID,
-      name: "Luca Bianchi",
-      role: "Line cook",
-      phone: "(555) 010-6677",
-      pin: "3333",
-      createdAt: new Date(0).toISOString(),
-    },
-  ];
-  const entries: TimeEntry[] = [
-    // Marco and Elena are on shift right now; Luca worked yesterday.
-    {
-      id: "te_1",
-      restaurantId: DEMO_RESTAURANT_ID,
-      workerId: "w_marco",
-      clockIn: iso(2.2 * 60 * 60_000),
-    },
-    {
-      id: "te_2",
-      restaurantId: DEMO_RESTAURANT_ID,
-      workerId: "w_elena",
-      clockIn: iso(48 * 60_000),
-    },
-    {
-      id: "te_3",
-      restaurantId: DEMO_RESTAURANT_ID,
-      workerId: "w_luca",
-      clockIn: iso(30 * 60 * 60_000),
-      clockOut: iso(24 * 60 * 60_000),
-    },
-  ];
-  return { workers, entries };
+function toEntry(row: TimeEntryRow): TimeEntry {
+  return {
+    id: row.id,
+    restaurantId: row.restaurantId,
+    // Null only for deleted workers' historical shifts, which presence never
+    // queries — coalesce to keep the external shape.
+    workerId: row.workerId ?? "",
+    clockIn: row.clockIn.toISOString(),
+    clockOut: row.clockOut?.toISOString(),
+  };
 }
 
-function getStore(): WorkerStore {
-  if (!globalForWorkers.__tabloWorkerStore) {
-    globalForWorkers.__tabloWorkerStore = seed();
-  }
-  return globalForWorkers.__tabloWorkerStore;
+export async function listWorkers(restaurantId: string): Promise<Worker[]> {
+  const rows = await prisma.worker.findMany({
+    where: { restaurantId },
+    orderBy: { createdAt: "asc" },
+  });
+  return rows.map(toWorker);
 }
 
-export function listWorkers(restaurantId: string): Worker[] {
-  return getStore().workers.filter((w) => w.restaurantId === restaurantId);
-}
-
-export function findWorker(
+export async function findWorker(
   restaurantId: string,
   workerId: string,
-): Worker | undefined {
-  return getStore().workers.find(
-    (w) => w.restaurantId === restaurantId && w.id === workerId,
-  );
+): Promise<Worker | undefined> {
+  const row = await prisma.worker.findFirst({
+    where: { restaurantId, id: workerId },
+  });
+  return row ? toWorker(row) : undefined;
 }
 
 export interface WorkerInput {
@@ -122,94 +79,142 @@ export interface WorkerInput {
   pin: string;
 }
 
-export function createWorker(restaurantId: string, input: WorkerInput): Worker {
-  const worker: Worker = {
-    id: `w_${crypto.randomUUID().slice(0, 8)}`,
-    restaurantId,
-    name: input.name.trim(),
-    role: input.role.trim(),
-    phone: input.phone?.trim() || undefined,
-    email: input.email?.trim() || undefined,
-    pin: input.pin,
-    createdAt: new Date().toISOString(),
-  };
-  getStore().workers.push(worker);
-  return worker;
+/** PINs are unique per restaurant so the kitchen app can resolve a worker
+ * from the PIN alone. Salted hashes can't be unique-indexed, so the check
+ * verifies the candidate against every existing hash. */
+async function pinTaken(
+  restaurantId: string,
+  pin: string,
+  excludeWorkerId?: string,
+): Promise<boolean> {
+  const rows = await prisma.worker.findMany({
+    where: { restaurantId, ...(excludeWorkerId ? { id: { not: excludeWorkerId } } : {}) },
+    select: { pinHash: true },
+  });
+  for (const row of rows) {
+    if (await verifyPassword(pin, row.pinHash)) return true;
+  }
+  return false;
 }
 
-export function updateWorker(
+export type WorkerResult = Worker | { error: string };
+
+export async function createWorker(
+  restaurantId: string,
+  input: WorkerInput,
+): Promise<WorkerResult> {
+  if (await pinTaken(restaurantId, input.pin)) {
+    return { error: "That PIN is already in use — pick a different one." };
+  }
+  const row = await prisma.worker.create({
+    data: {
+      id: `w_${crypto.randomUUID().slice(0, 8)}`,
+      restaurantId,
+      name: input.name.trim(),
+      role: input.role.trim(),
+      phone: input.phone?.trim() || null,
+      email: input.email?.trim() || null,
+      pinHash: await hashPassword(input.pin),
+    },
+  });
+  return toWorker(row);
+}
+
+export async function updateWorker(
   restaurantId: string,
   workerId: string,
   patch: Partial<WorkerInput>,
-): Worker | undefined {
-  const worker = findWorker(restaurantId, workerId);
+): Promise<WorkerResult | undefined> {
+  const worker = await findWorker(restaurantId, workerId);
   if (!worker) return undefined;
-  if (patch.name?.trim()) worker.name = patch.name.trim();
-  if (patch.role?.trim()) worker.role = patch.role.trim();
-  if (patch.phone !== undefined) worker.phone = patch.phone.trim() || undefined;
-  if (patch.email !== undefined) worker.email = patch.email.trim() || undefined;
-  if (patch.pin) worker.pin = patch.pin;
-  return worker;
+  const data: Record<string, unknown> = {};
+  if (patch.name?.trim()) data.name = patch.name.trim();
+  if (patch.role?.trim()) data.role = patch.role.trim();
+  if (patch.phone !== undefined) data.phone = patch.phone.trim() || null;
+  if (patch.email !== undefined) data.email = patch.email.trim() || null;
+  if (patch.pin) {
+    if (await pinTaken(restaurantId, patch.pin, workerId)) {
+      return { error: "That PIN is already in use — pick a different one." };
+    }
+    data.pinHash = await hashPassword(patch.pin);
+  }
+  const row = await prisma.worker.update({ where: { id: workerId }, data });
+  return toWorker(row);
 }
 
 /** Removes the worker; their past time entries are kept for the record but an
  * open shift is closed. */
-export function deleteWorker(restaurantId: string, workerId: string): boolean {
-  const store = getStore();
-  const idx = store.workers.findIndex(
-    (w) => w.restaurantId === restaurantId && w.id === workerId,
-  );
-  if (idx === -1) return false;
-  const open = openEntry(restaurantId, workerId);
-  if (open) open.clockOut = new Date().toISOString();
-  store.workers.splice(idx, 1);
+export async function deleteWorker(
+  restaurantId: string,
+  workerId: string,
+): Promise<boolean> {
+  const worker = await findWorker(restaurantId, workerId);
+  if (!worker) return false;
+  await prisma.timeEntry.updateMany({
+    where: { restaurantId, workerId, clockOut: null },
+    data: { clockOut: new Date() },
+  });
+  // Past entries stay on the books; the FK nulls their workerId.
+  await prisma.worker.delete({ where: { id: workerId } });
   return true;
 }
 
-export function openEntry(
+export async function openEntry(
   restaurantId: string,
   workerId: string,
-): TimeEntry | undefined {
-  return getStore().entries.find(
-    (e) =>
-      e.restaurantId === restaurantId && e.workerId === workerId && !e.clockOut,
-  );
+): Promise<TimeEntry | undefined> {
+  const row = await prisma.timeEntry.findFirst({
+    where: { restaurantId, workerId, clockOut: null },
+  });
+  return row ? toEntry(row) : undefined;
 }
 
-export function clockIn(
+export async function clockIn(
   restaurantId: string,
   workerId: string,
-): TimeEntry | { error: string } {
-  if (!findWorker(restaurantId, workerId)) return { error: "Unknown worker" };
-  if (openEntry(restaurantId, workerId))
+): Promise<TimeEntry | { error: string }> {
+  if (!(await findWorker(restaurantId, workerId)))
+    return { error: "Unknown worker" };
+  if (await openEntry(restaurantId, workerId))
     return { error: "Already clocked in" };
-  const entry: TimeEntry = {
-    id: `te_${crypto.randomUUID().slice(0, 8)}`,
-    restaurantId,
-    workerId,
-    clockIn: new Date().toISOString(),
-  };
-  getStore().entries.push(entry);
-  return entry;
+  const row = await prisma.timeEntry.create({
+    data: {
+      id: `te_${crypto.randomUUID().slice(0, 8)}`,
+      restaurantId,
+      workerId,
+      clockIn: new Date(),
+    },
+  });
+  return toEntry(row);
 }
 
-export function clockOut(
+export async function clockOut(
   restaurantId: string,
   workerId: string,
-): TimeEntry | { error: string } {
-  const open = openEntry(restaurantId, workerId);
+): Promise<TimeEntry | { error: string }> {
+  const open = await prisma.timeEntry.findFirst({
+    where: { restaurantId, workerId, clockOut: null },
+  });
   if (!open) return { error: "Not clocked in" };
-  open.clockOut = new Date().toISOString();
-  return open;
+  const row = await prisma.timeEntry.update({
+    where: { id: open.id },
+    data: { clockOut: new Date() },
+  });
+  return toEntry(row);
 }
 
-export function verifyWorkerPin(
+/** Resolve which worker a PIN belongs to — the kitchen check-in never sees a
+ * roster, so the PIN alone identifies the worker. scrypt per worker keeps
+ * brute force expensive; the clock route also rate-limits attempts. */
+export async function findWorkerByPin(
   restaurantId: string,
-  workerId: string,
   pin: string,
-): boolean {
-  const worker = findWorker(restaurantId, workerId);
-  return !!worker && worker.pin === pin;
+): Promise<Worker | null> {
+  const rows = await prisma.worker.findMany({ where: { restaurantId } });
+  for (const row of rows) {
+    if (await verifyPassword(pin, row.pinHash)) return toWorker(row);
+  }
+  return null;
 }
 
 /** Presence + hours summary the dashboard and kitchen app both render.
@@ -227,14 +232,18 @@ export interface WorkerPresence {
   minutesToday: number;
 }
 
-export function workerPresenceList(
+export async function workerPresenceList(
   restaurantId: string,
   now = new Date(),
-): WorkerPresence[] {
-  const entries = getStore().entries.filter(
-    (e) => e.restaurantId === restaurantId,
-  );
-  return listWorkers(restaurantId).map((worker) => {
+): Promise<WorkerPresence[]> {
+  const [workers, entryRows] = await Promise.all([
+    listWorkers(restaurantId),
+    prisma.timeEntry.findMany({
+      where: { restaurantId, NOT: { workerId: null } },
+    }),
+  ]);
+  const entries = entryRows.map(toEntry);
+  return workers.map((worker) => {
     const own = entries.filter((e) => e.workerId === worker.id);
     const open = own.find((e) => !e.clockOut);
     return {

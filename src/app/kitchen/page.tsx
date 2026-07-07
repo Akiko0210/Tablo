@@ -15,21 +15,14 @@ import {
   UserRound,
 } from "lucide-react";
 import type { Order, OrderStatus } from "@/lib/orders/types";
-import type { WorkerPresence } from "@/lib/workers/store";
-import { formatDuration, sinceLabel } from "@/lib/workers/time";
+import { useNow } from "@/lib/use-now";
+import { sinceLabel } from "@/lib/workers/time";
 import { initialsFrom } from "@/lib/auth/initials";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from "@/components/ui/sheet";
 import { OrderCard } from "@/components/dashboard/order-card";
 import { Logo } from "@/components/landing/logo";
 
@@ -269,162 +262,49 @@ function TabButton({
 }
 
 // ---------------------------------------------------------------------------
-// Time clock
+// Time clock — PIN-first. The device never sees a worker roster: the worker
+// types their PIN and the server resolves who it belongs to and toggles
+// their shift. (Names/roles/contacts stay private to the dashboard.)
 // ---------------------------------------------------------------------------
 
 function ClockTab() {
-  const [workers, setWorkers] = React.useState<WorkerPresence[] | null>(null);
-  const [selected, setSelected] = React.useState<WorkerPresence | null>(null);
-
-  const load = React.useCallback(async () => {
-    try {
-      const res = await fetch("/api/kitchen/workers");
-      if (res.status === 401) {
-        window.location.reload();
-        return;
-      }
-      if (!res.ok) return;
-      const data = await res.json();
-      setWorkers(data.workers ?? []);
-    } catch {
-      // next poll retries
-    }
-  }, []);
-
-  React.useEffect(() => {
-    // Polling an external system; setState happens in the async continuation.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    load();
-    const t = setInterval(load, 10_000);
-    return () => clearInterval(t);
-  }, [load]);
-
-  if (!workers) {
-    return (
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {[0, 1, 2, 3, 4, 5].map((i) => (
-          <Skeleton key={i} className="h-32 rounded-2xl" />
-        ))}
-      </div>
-    );
-  }
-
-  if (workers.length === 0) {
-    return (
-      <div className="rounded-2xl border border-dashed border-border bg-muted/30 px-6 py-12 text-center">
-        <UserRound className="mx-auto size-6 text-muted-foreground" />
-        <p className="mt-2 text-sm font-medium">No workers registered</p>
-        <p className="mx-auto mt-1 max-w-xs text-[13px] text-muted-foreground">
-          Ask your manager to add you on the dashboard&apos;s Team page.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <p className="mb-3 text-[13px] text-muted-foreground">
-        Tap your name, enter your PIN.
-      </p>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {workers.map((worker) => (
-          <button
-            key={worker.id}
-            type="button"
-            onClick={() => setSelected(worker)}
-            className={cn(
-              "flex flex-col items-center rounded-2xl border p-4 text-center transition-colors",
-              worker.clockedIn
-                ? "border-green-200 bg-green-50/60 hover:bg-green-50"
-                : "border-border bg-card hover:bg-muted/60",
-            )}
-          >
-            <span className="relative grid size-12 place-items-center rounded-full bg-foreground text-sm font-semibold text-background">
-              {initialsFrom(worker.name)}
-              <span
-                className={cn(
-                  "absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full border-2",
-                  worker.clockedIn
-                    ? "border-green-50 bg-green-500"
-                    : "border-card bg-muted-foreground/40",
-                )}
-              />
-            </span>
-            <span className="mt-2 text-sm font-semibold leading-tight">
-              {worker.name}
-            </span>
-            <span className="text-[11px] text-muted-foreground">
-              {worker.role}
-            </span>
-            <span
-              className={cn(
-                "mt-1.5 text-[11px] font-medium",
-                worker.clockedIn ? "text-green-700" : "text-muted-foreground",
-              )}
-            >
-              {worker.clockedIn && worker.since
-                ? `In since ${sinceLabel(worker.since)}`
-                : worker.minutesToday > 0
-                  ? `${formatDuration(worker.minutesToday)} today`
-                  : "Off shift"}
-            </span>
-          </button>
-        ))}
-      </div>
-
-      <PinSheet
-        worker={selected}
-        onClose={() => setSelected(null)}
-        onDone={() => {
-          setSelected(null);
-          load();
-        }}
-      />
-    </>
-  );
-}
-
-function PinSheet({
-  worker,
-  onClose,
-  onDone,
-}: {
-  worker: WorkerPresence | null;
-  onClose: () => void;
-  onDone: () => void;
-}) {
   const [pin, setPin] = React.useState("");
   const [pending, setPending] = React.useState(false);
-  const action = worker?.clockedIn ? "out" : "in";
-
-  React.useEffect(() => {
-    // Clear the previous worker's PIN whenever the sheet opens for someone.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (worker) setPin("");
-  }, [worker]);
+  const [last, setLast] = React.useState<{
+    firstName: string;
+    action: "in" | "out";
+    at: string;
+  } | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!worker || pending || pin.length !== 4) return;
+    if (pending || pin.length !== 4) return;
     setPending(true);
     try {
       const res = await fetch("/api/kitchen/clock", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workerId: worker.id, pin, action }),
+        body: JSON.stringify({ pin }),
       });
+      if (res.status === 401) {
+        window.location.reload();
+        return;
+      }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(data.error ?? "Couldn't clock you " + action + ".");
+        toast.error(data.error ?? "Couldn't clock you in.");
         setPin("");
         return;
       }
+      const firstName: string = data.worker?.firstName ?? "there";
+      const action: "in" | "out" = data.action === "out" ? "out" : "in";
       toast.success(
         action === "in"
-          ? `Welcome, ${worker.name.split(" ")[0]} — you're clocked in.`
-          : `See you, ${worker.name.split(" ")[0]} — you're clocked out.`,
+          ? `Welcome, ${firstName} — you're clocked in.`
+          : `See you, ${firstName} — you're clocked out.`,
       );
-      onDone();
+      setLast({ firstName, action, at: sinceLabel(new Date().toISOString()) });
+      setPin("");
     } catch {
       toast.error("Couldn't reach the server.");
     } finally {
@@ -433,51 +313,55 @@ function PinSheet({
   }
 
   return (
-    <Sheet open={!!worker} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent side="bottom" className="mx-auto max-w-md rounded-t-2xl">
-        {worker && (
-          <>
-            <SheetHeader>
-              <SheetTitle>
-                {action === "in" ? "Clock in" : "Clock out"} · {worker.name}
-              </SheetTitle>
-              <SheetDescription>
-                {action === "in"
-                  ? "Enter your 4-digit PIN to start your shift."
-                  : worker.since
-                    ? `On shift since ${sinceLabel(worker.since)}. Enter your PIN to end it.`
-                    : "Enter your PIN to end your shift."}
-              </SheetDescription>
-            </SheetHeader>
-            <form onSubmit={submit} className="flex flex-col gap-4 px-4 pb-6">
-              <Input
-                autoFocus
-                inputMode="numeric"
-                maxLength={4}
-                value={pin}
-                onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
-                placeholder="••••"
-                aria-label="PIN"
-                className="h-14 text-center text-2xl font-bold tracking-[0.5em]"
-              />
-              <Button
-                type="submit"
-                disabled={pin.length !== 4 || pending}
-                className="h-12 rounded-xl text-[15px] font-semibold"
-              >
-                {pending ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : action === "in" ? (
-                  "Clock in"
-                ) : (
-                  "Clock out"
-                )}
-              </Button>
-            </form>
-          </>
-        )}
-      </SheetContent>
-    </Sheet>
+    <div className="mx-auto max-w-sm">
+      <div className="rounded-2xl border border-border bg-card p-6">
+        <div className="grid size-12 place-items-center rounded-xl bg-brand-soft text-brand-strong">
+          <UserRound className="size-6" />
+        </div>
+        <h2 className="mt-4 text-lg font-bold tracking-tight">Time clock</h2>
+        <p className="mt-1 text-[13px] text-muted-foreground">
+          Enter your 4-digit PIN to clock in or out. Your shift toggles
+          automatically.
+        </p>
+        <form onSubmit={submit} className="mt-5 flex flex-col gap-4">
+          <Input
+            autoFocus
+            inputMode="numeric"
+            maxLength={4}
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
+            placeholder="••••"
+            aria-label="PIN"
+            className="h-14 text-center text-2xl font-bold tracking-[0.5em]"
+          />
+          <Button
+            type="submit"
+            disabled={pin.length !== 4 || pending}
+            className="h-12 rounded-xl text-[15px] font-semibold"
+          >
+            {pending ? <Loader2 className="size-4 animate-spin" /> : "Clock in / out"}
+          </Button>
+        </form>
+      </div>
+
+      {last && (
+        <div
+          className={cn(
+            "mt-3 rounded-2xl border px-4 py-3 text-sm",
+            last.action === "in"
+              ? "border-green-200 bg-green-50/60 text-green-800"
+              : "border-border bg-muted/40 text-muted-foreground",
+          )}
+        >
+          {last.firstName} clocked {last.action} at {last.at}.
+        </div>
+      )}
+
+      <p className="mt-3 text-center text-[12px] text-muted-foreground">
+        Forgot your PIN? Ask your manager — they can set a new one on the Team
+        page.
+      </p>
+    </div>
   );
 }
 
@@ -489,6 +373,7 @@ const ACTIVE_STATUSES: OrderStatus[] = ["new", "preparing", "ready"];
 
 function OrdersTab() {
   const [orders, setOrders] = React.useState<Order[] | null>(null);
+  const now = useNow();
 
   const load = React.useCallback(async () => {
     try {
@@ -568,7 +453,13 @@ function OrdersTab() {
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       {active.map((order) => (
-        <OrderCard key={order.id} order={order} onAdvance={advance} />
+        <OrderCard
+          key={order.id}
+          order={order}
+          onAdvance={advance}
+          now={now}
+          escalate
+        />
       ))}
     </div>
   );

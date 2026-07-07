@@ -5,9 +5,15 @@ import { categoriesFor, listMenuItems } from "@/lib/menu/store";
 
 /** Serializable snapshot of a restaurant + its live menu for the guest app.
  * Null when the slug doesn't resolve. */
-export function guestRestaurantForSlug(slug: string): GuestRestaurant | null {
-  const record = findRestaurantBySlug(slug);
+export async function guestRestaurantForSlug(
+  slug: string,
+): Promise<GuestRestaurant | null> {
+  const record = await findRestaurantBySlug(slug);
   if (!record) return null;
+  const [categories, menuItems] = await Promise.all([
+    categoriesFor(record.id),
+    listMenuItems(record.id),
+  ]);
   return {
     id: record.id,
     slug: record.slug,
@@ -16,9 +22,9 @@ export function guestRestaurantForSlug(slug: string): GuestRestaurant | null {
     tagline: record.tagline,
     currency: record.currency,
     tableCount: record.tableCount,
-    categories: categoriesFor(record.id),
+    categories,
     // Pick only the guest-facing fields so the client payload stays lean.
-    items: listMenuItems(record.id).map((item) => ({
+    items: menuItems.map((item) => ({
       id: item.id,
       name: item.name,
       description: item.description,
@@ -28,8 +34,7 @@ export function guestRestaurantForSlug(slug: string): GuestRestaurant | null {
       imageUrl: item.imageUrl,
       soldOut: item.soldOut,
       popular: item.popular,
-      sizes: item.sizes,
-      addons: item.addons,
+      modifierGroups: item.modifierGroups,
     })),
   };
 }

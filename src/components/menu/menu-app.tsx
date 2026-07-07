@@ -41,16 +41,15 @@ function MenuFlow({ tableId }: { tableId: string }) {
         {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        // Item + option ids only — the server resolves names and recomputes
+        // every price against the live menu.
         body: JSON.stringify({
           table: tableId,
-          subtotal,
           kitchenNote,
           lines: snapshotLines.map((l) => ({
-            name: l.name,
+            itemId: l.itemId,
             quantity: l.quantity,
-            unitPrice: l.unitPrice,
-            sizeLabel: l.sizeLabel,
-            addonLabels: l.addonLabels,
+            optionIds: l.optionIds,
             note: l.note,
           })),
         }),

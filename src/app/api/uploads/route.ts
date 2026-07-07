@@ -6,6 +6,7 @@ import {
   saveUpload,
 } from "@/lib/uploads/store";
 import { MAX_PHOTOS_PER_ACCOUNT, validateUploadFile } from "@/lib/uploads/limits";
+import { limit } from "@/lib/rate-limit";
 
 // GET /api/uploads — staff only. List the signed-in owner's photos (metadata
 // only, the bytes are served by /api/uploads/[id]).
@@ -15,7 +16,7 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   return NextResponse.json({
-    uploads: listUploadsForOwner(session.userId).map((u) => ({
+    uploads: (await listUploadsForOwner(session.userId)).map((u) => ({
       id: u.id,
       filename: u.filename,
       url: `/api/uploads/${u.id}`,
@@ -41,6 +42,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const rate = await limit(`uploads:${session.userId}`, 30, 60_000);
+  if (!rate.allowed) {
+    return NextResponse.json(
+      { error: "Too many uploads — wait a minute and try again." },
+      { status: 429, headers: { "Retry-After": String(rate.retryAfter) } },
+    );
+  }
+
   let form: FormData;
   try {
     form = await request.formData();
@@ -57,7 +66,7 @@ export async function POST(request: Request) {
   // toward the analysis-photo cap. Anything else is a "menu-photo".
   const kind = form.get("kind") === "item-image" ? "item-image" : "menu-photo";
 
-  const existing = countUploadsForOwner(session.userId);
+  const existing = await countUploadsForOwner(session.userId);
   const results: UploadResult[] = [];
   let accepted = 0;
 
@@ -76,7 +85,7 @@ export async function POST(request: Request) {
     }
 
     const data = Buffer.from(await file.arrayBuffer());
-    const saved = saveUpload({
+    const saved = await saveUpload({
       ownerId: session.userId,
       kind,
       mime: file.type,

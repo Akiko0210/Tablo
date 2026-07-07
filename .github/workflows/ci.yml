@@ -1,0 +1,52 @@
+name: CI
+
+# Runs on every PR and on pushes to main. PR branches fire the pull_request
+# event; the post-merge commit on main fires push — so a PR into main isn't
+# checked twice.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to the same ref cancels an in-flight run for it (except on main,
+# where every commit is kept honest).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  check:
+    name: Type-check, lint, test, build
+    runs-on: ubuntu-latest
+    env:
+      # `next build` and Prisma need this to resolve the datasource, but nothing
+      # connects at build time (route handlers are dynamic; the Prisma client
+      # connects lazily on first query). A dummy URL is enough. AUTH_SECRET is
+      # intentionally absent — the fail-fast is exempt during
+      # NEXT_PHASE=phase-production-build, so this proves the build survives
+      # without secrets.
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # `npm ci` installs from the lockfile and runs postinstall (prisma
+      # generate), so the Prisma client exists before type-check and build.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build

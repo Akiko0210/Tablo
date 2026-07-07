@@ -73,11 +73,9 @@ export function ReviewScreen({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="font-semibold">{line.name}</div>
-                    {(line.sizeLabel || line.addonLabels.length > 0) && (
+                    {line.optionLabels.length > 0 && (
                       <div className="mt-0.5 text-[13px] text-muted-foreground">
-                        {[line.sizeLabel, ...line.addonLabels]
-                          .filter(Boolean)
-                          .join(" · ")}
+                        {line.optionLabels.join(" · ")}
                       </div>
                     )}
                     {line.note && (

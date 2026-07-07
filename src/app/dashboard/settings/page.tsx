@@ -18,7 +18,7 @@ export default async function SettingsPage() {
   if (!ctx) redirect("/login");
   const { restaurant, session } = ctx;
 
-  const uploads = listUploadsForOwner(session.userId).map((u) => ({
+  const uploads = (await listUploadsForOwner(session.userId)).map((u) => ({
     id: u.id,
     url: `/api/uploads/${u.id}`,
     filename: u.filename,

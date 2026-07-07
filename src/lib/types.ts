@@ -9,19 +9,29 @@ export type DietaryTag =
   | "Nuts"
   | "Spicy";
 
-export interface SizeOption {
+export interface ModifierOption {
   id: string;
   label: string;
-  /** Added to the base price when selected. 0 = included. */
+  /** Added to the item's base price when selected. 0 = included. */
   priceDelta: number;
   /** Small note shown next to the option (e.g. "Included"). */
   note?: string;
 }
 
-export interface AddOn {
+/**
+ * A guest-facing choice on a menu item — sizes, protein choice, spice level,
+ * sides, add-ons… `max === 1` renders as radios, anything else as checkboxes.
+ */
+export interface ModifierGroup {
   id: string;
   label: string;
-  price: number;
+  /** Minimum number of selections a guest must make (0 = optional group). */
+  min: number;
+  /** Maximum number of selections allowed. */
+  max: number;
+  /** Required groups block add-to-cart until at least `min` picks are made. */
+  required: boolean;
+  options: ModifierOption[];
 }
 
 export interface MenuItem {
@@ -40,8 +50,7 @@ export interface MenuItem {
   soldOut?: boolean;
   /** Surfaced in the "Popular" tab and flagged with a "Most loved" badge. */
   popular?: boolean;
-  sizes?: SizeOption[];
-  addons?: AddOn[];
+  modifierGroups?: ModifierGroup[];
 }
 
 export interface Category {
@@ -63,14 +72,17 @@ export interface Restaurant {
 
 /** A configured line in the guest's order. */
 export interface CartLine {
-  /** Stable id for this specific configuration (item + size + addons). */
+  /** Stable id for this specific configuration (item + selected options). */
   lineId: string;
   itemId: string;
   name: string;
   quantity: number;
-  /** Unit price including the selected size + add-ons (before quantity). */
+  /** Unit price including the selected options (before quantity). Display
+   * only — the server recomputes prices from `optionIds` on submit. */
   unitPrice: number;
-  sizeLabel?: string;
-  addonLabels: string[];
+  /** Selected modifier option ids, sent to the server to price the order. */
+  optionIds: string[];
+  /** Selected option labels in menu order, for display. */
+  optionLabels: string[];
   note?: string;
 }

@@ -3,7 +3,6 @@
 import * as React from "react";
 import { toast } from "sonner";
 import {
-  KeyRound,
   Loader2,
   Mail,
   Pencil,
@@ -33,7 +32,6 @@ interface WorkerRow {
   role: string;
   phone?: string;
   email?: string;
-  pin?: string;
   clockedIn: boolean;
   since?: string;
   minutesToday: number;
@@ -162,11 +160,6 @@ export function TeamManager() {
                       <Mail className="size-3" /> {worker.email}
                     </span>
                   )}
-                  {worker.pin && (
-                    <span className="inline-flex items-center gap-1">
-                      <KeyRound className="size-3" /> PIN {worker.pin}
-                    </span>
-                  )}
                 </div>
               </div>
 
@@ -244,7 +237,7 @@ function WorkerEditorSheet({
               role: worker.role,
               phone: worker.phone ?? "",
               email: worker.email ?? "",
-              pin: worker.pin ?? "",
+              pin: "",
             }
           : emptyFields(),
       );
@@ -258,22 +251,24 @@ function WorkerEditorSheet({
   const valid =
     fields.name.trim().length > 0 &&
     fields.role.trim().length > 0 &&
-    /^\d{4}$/.test(fields.pin);
+    (worker ? fields.pin === "" || /^\d{4}$/.test(fields.pin) : /^\d{4}$/.test(fields.pin));
 
   async function save() {
     if (!valid || pending) return;
     setPending(true);
     try {
+      const body: Record<string, string> = { ...fields };
+      if (worker && body.pin === "") delete body.pin;
       const res = worker
         ? await fetch(`/api/workers/${worker.id}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(fields),
+            body: JSON.stringify(body),
           })
         : await fetch("/api/workers", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(fields),
+            body: JSON.stringify(body),
           });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -335,9 +330,14 @@ function WorkerEditorSheet({
                 maxLength={4}
                 value={fields.pin}
                 onChange={(e) => set("pin", e.target.value.replace(/\D/g, ""))}
-                placeholder="1234"
+                placeholder={worker ? "Unchanged" : "1234"}
                 className="h-10 tabular-nums"
               />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {worker
+                  ? "Leave blank to keep the current PIN."
+                  : "Must be unique — share it only with this worker."}
+              </p>
             </div>
           </div>
           <div>

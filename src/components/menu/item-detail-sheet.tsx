@@ -3,8 +3,8 @@
 import * as React from "react";
 import { Check } from "lucide-react";
 import { toast } from "sonner";
-import type { AddOn, MenuItem, SizeOption } from "@/lib/types";
-import { unitPriceFor } from "@/lib/cart";
+import type { MenuItem, ModifierGroup } from "@/lib/types";
+import { selectedOptionsFor, unitPriceFor } from "@/lib/cart";
 import { formatMoney, formatDelta } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +20,24 @@ import { ItemVisual } from "./item-visual";
 import { QuantityStepper } from "./quantity-stepper";
 import { useCart } from "./cart-context";
 
+/** A required group must get at least one pick even if min is 0. */
+function minFor(group: ModifierGroup): number {
+  return group.required ? Math.max(group.min, 1) : group.min;
+}
+
+/** Default picks per group: single-choice must-pick groups (sizes and the
+ * like) preselect their first option; everything else starts empty. */
+function defaultSelections(item: MenuItem | null): Record<string, string[]> {
+  const selections: Record<string, string[]> = {};
+  for (const group of item?.modifierGroups ?? []) {
+    selections[group.id] =
+      group.max === 1 && minFor(group) > 0 && group.options.length > 0
+        ? [group.options[0].id]
+        : [];
+  }
+  return selections;
+}
+
 export function ItemDetailSheet({
   item,
   open,
@@ -31,10 +49,9 @@ export function ItemDetailSheet({
 }) {
   const { add } = useCart();
 
-  const [sizeId, setSizeId] = React.useState<string | undefined>(
-    item?.sizes?.[0]?.id,
+  const [selections, setSelections] = React.useState<Record<string, string[]>>(
+    () => defaultSelections(item),
   );
-  const [addonIds, setAddonIds] = React.useState<string[]>([]);
   const [note, setNote] = React.useState("");
   const [qty, setQty] = React.useState(1);
 
@@ -44,24 +61,39 @@ export function ItemDetailSheet({
   const [lastItemId, setLastItemId] = React.useState(item?.id);
   if (item && item.id !== lastItemId) {
     setLastItemId(item.id);
-    setSizeId(item.sizes?.[0]?.id);
-    setAddonIds([]);
+    setSelections(defaultSelections(item));
     setNote("");
     setQty(1);
   }
 
   if (!item) return null;
 
-  const size: SizeOption | undefined = item.sizes?.find((s) => s.id === sizeId);
-  const selectedAddons: AddOn[] =
-    item.addons?.filter((a) => addonIds.includes(a.id)) ?? [];
-  const unitPrice = unitPriceFor(item, size, selectedAddons);
+  const groups = item.modifierGroups ?? [];
+  const optionIds = groups.flatMap((g) => selections[g.id] ?? []);
+  const selectedOptions = selectedOptionsFor(item, optionIds);
+  const unitPrice = unitPriceFor(item, selectedOptions);
   const total = unitPrice * qty;
+  const missingGroup = groups.find(
+    (g) => (selections[g.id] ?? []).length < minFor(g),
+  );
 
-  function toggleAddon(id: string) {
-    setAddonIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
+  function toggleOption(group: ModifierGroup, optionId: string) {
+    setSelections((prev) => {
+      const current = prev[group.id] ?? [];
+      const active = current.includes(optionId);
+      let next: string[];
+      if (group.max === 1) {
+        // Radio; deselect is only allowed when the group is optional.
+        next = active ? (minFor(group) > 0 ? current : []) : [optionId];
+      } else if (active) {
+        next = current.filter((id) => id !== optionId);
+      } else if (current.length < group.max) {
+        next = [...current, optionId];
+      } else {
+        return prev; // at the max — ignore further picks
+      }
+      return { ...prev, [group.id]: next };
+    });
   }
 
   function handleAdd() {
@@ -70,10 +102,8 @@ export function ItemDetailSheet({
       name: item!.name,
       quantity: qty,
       unitPrice,
-      sizeId,
-      sizeLabel: size?.label,
-      addonIds,
-      addonLabels: selectedAddons.map((a) => a.label),
+      optionIds,
+      optionLabels: selectedOptions.map((o) => o.label),
       note,
     });
     toast.success(`Added to order`, {
@@ -127,47 +157,34 @@ export function ItemDetailSheet({
               {item.description}
             </SheetDescription>
 
-            {/* Size */}
-            {item.sizes && item.sizes.length > 0 && (
-              <Section title="Size" required>
+            {/* Choice groups (size, protein, spice level, add-ons…) */}
+            {groups.map((group) => (
+              <Section
+                key={group.id}
+                title={group.label}
+                required={minFor(group) > 0}
+                optional={minFor(group) === 0}
+                hint={group.max > 1 ? `Pick up to ${group.max}` : undefined}
+              >
                 <div className="grid gap-2">
-                  {item.sizes.map((s) => {
-                    const active = s.id === sizeId;
+                  {group.options.map((option) => {
+                    const active = (selections[group.id] ?? []).includes(
+                      option.id,
+                    );
                     return (
                       <OptionRow
-                        key={s.id}
+                        key={option.id}
                         active={active}
-                        onClick={() => setSizeId(s.id)}
-                        control="radio"
-                        label={s.label}
-                        trailing={s.note ?? formatDelta(s.priceDelta)}
+                        onClick={() => toggleOption(group, option.id)}
+                        control={group.max === 1 ? "radio" : "check"}
+                        label={option.label}
+                        trailing={option.note ?? formatDelta(option.priceDelta)}
                       />
                     );
                   })}
                 </div>
               </Section>
-            )}
-
-            {/* Add-ons */}
-            {item.addons && item.addons.length > 0 && (
-              <Section title="Add-ons" optional>
-                <div className="grid gap-2">
-                  {item.addons.map((a) => {
-                    const active = addonIds.includes(a.id);
-                    return (
-                      <OptionRow
-                        key={a.id}
-                        active={active}
-                        onClick={() => toggleAddon(a.id)}
-                        control="check"
-                        label={a.label}
-                        trailing={formatDelta(a.price)}
-                      />
-                    );
-                  })}
-                </div>
-              </Section>
-            )}
+            ))}
 
             {/* Special requests */}
             <Section title="Special requests" optional>
@@ -185,9 +202,12 @@ export function ItemDetailSheet({
             <QuantityStepper value={qty} onChange={(n) => setQty(Math.max(1, n))} />
             <Button
               onClick={handleAdd}
+              disabled={!!missingGroup}
               className="h-11 flex-1 rounded-xl text-[15px] font-semibold"
             >
-              Add to order · {formatMoney(total)}
+              {missingGroup
+                ? `Choose ${missingGroup.label.toLowerCase()} first`
+                : `Add to order · ${formatMoney(total)}`}
             </Button>
           </div>
         </div>
@@ -200,17 +220,24 @@ function Section({
   title,
   required,
   optional,
+  hint,
   children,
 }: {
   title: string;
   required?: boolean;
   optional?: boolean;
+  hint?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="mt-5">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold">{title}</h3>
+        <div className="flex items-baseline gap-2">
+          <h3 className="text-sm font-semibold">{title}</h3>
+          {hint && (
+            <span className="text-xs text-muted-foreground">{hint}</span>
+          )}
+        </div>
         {required && (
           <Badge className="bg-brand-soft text-brand-strong border-brand-border">
             Required

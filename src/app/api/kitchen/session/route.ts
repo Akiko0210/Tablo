@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { findRestaurantByKitchenCode } from "@/lib/restaurants/store";
+import { clientIp, limit } from "@/lib/rate-limit";
 import {
   KITCHEN_COOKIE,
   getKitchenRestaurant,
@@ -20,7 +21,16 @@ export async function GET() {
 }
 
 // POST /api/kitchen/session — sign the device in with the kitchen code.
+// Rate-limited per IP so codes can't be guessed by enumeration.
 export async function POST(request: Request) {
+  const rate = await limit(`kitchen-session:${clientIp(request)}`, 10, 60_000);
+  if (!rate.allowed) {
+    return NextResponse.json(
+      { error: "Too many attempts — wait a minute and try again." },
+      { status: 429, headers: { "Retry-After": String(rate.retryAfter) } },
+    );
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -33,7 +43,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Enter the kitchen code" }, { status: 400 });
   }
 
-  const restaurant = findRestaurantByKitchenCode(code);
+  const restaurant = await findRestaurantByKitchenCode(code);
   if (!restaurant) {
     return NextResponse.json(
       { error: "That code doesn't match any restaurant" },

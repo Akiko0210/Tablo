@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { getStaffContext } from "@/lib/auth/current";
 import { runMenuGeneration } from "@/lib/menu/generate";
 import { getGenerationJob } from "@/lib/menu/generation-store";
@@ -9,7 +9,9 @@ export async function GET() {
   if (!ctx) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  return NextResponse.json({ generation: getGenerationJob(ctx.restaurant.id) });
+  return NextResponse.json({
+    generation: await getGenerationJob(ctx.restaurant.id),
+  });
 }
 
 // POST /api/menu/generate — staff only. (Re-)run the photo analysis.
@@ -18,17 +20,18 @@ export async function POST() {
   if (!ctx) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const job = getGenerationJob(ctx.restaurant.id);
+  const job = await getGenerationJob(ctx.restaurant.id);
   if (job.status === "running") {
     return NextResponse.json({ generation: job }, { status: 202 });
   }
 
-  // Fire and forget — the job records its own progress. Fine on a long-lived
-  // Node server; a serverless deploy would move this to a queue.
-  void runMenuGeneration(ctx.session.userId, ctx.restaurant.id);
+  // after() keeps the analysis running past the response on serverless — a
+  // detached promise would be frozen when the function suspends. The job
+  // records its own progress for the dashboard to poll.
+  after(() => runMenuGeneration(ctx.session.userId, ctx.restaurant.id));
 
   return NextResponse.json(
-    { generation: getGenerationJob(ctx.restaurant.id) },
+    { generation: await getGenerationJob(ctx.restaurant.id) },
     { status: 202 },
   );
 }

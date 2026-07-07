@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import {
   ArrowDownRight,
   ArrowUpRight,
+  Download,
   Lightbulb,
   Sparkles,
   TrendingDown,
@@ -13,6 +14,7 @@ import { listAllOrdersForAnalysis } from "@/lib/orders/store";
 import { listMenuItems } from "@/lib/menu/store";
 import { ensureAnalysisHistory } from "@/lib/analysis/ensure-history";
 import {
+  activitySummary,
   itemPerformance,
   ordersByHour,
   revenueByDayOfWeek,
@@ -36,43 +38,68 @@ export default async function AnalysisPage() {
   const { restaurant } = ctx;
 
   // First visit after the menu exists: backfill sample history so the charts
-  // aren't empty. No-op afterwards.
-  ensureAnalysisHistory(restaurant.id);
+  // aren't empty (demo restaurant only). No-op afterwards.
+  await ensureAnalysisHistory(restaurant.id);
 
   // Server component rendered per request (force-dynamic), so reading the wall
   // clock here is intentional — it anchors the explorer's "current" period.
   // eslint-disable-next-line react-hooks/purity
   const nowMs = Date.now();
 
-  const orders = listAllOrdersForAnalysis(restaurant.id);
-  const menuItems = listMenuItems(restaurant.id);
+  const [orders, menuItems] = await Promise.all([
+    listAllOrdersForAnalysis(restaurant.id),
+    listMenuItems(restaurant.id),
+  ]);
 
   // Compact event list (served sales only) for the client-side explorer, which
   // buckets it into whatever period/granularity the owner navigates to.
   const events: SalesEvent[] = orders
     .filter((o) => o.status === "served")
-    .map((o) => ({ t: new Date(o.createdAt).getTime(), revenue: o.subtotal }));
+    .map((o) => ({
+      t: new Date(o.createdAt).getTime(),
+      revenue: o.subtotal,
+      items: o.lines.reduce((n, l) => n + l.quantity, 0),
+    }));
 
   const byDay = revenueByDayOfWeek(orders, WINDOW_DAYS);
   const byHour = ordersByHour(orders, WINDOW_DAYS);
   const items = itemPerformance(orders, WINDOW_DAYS);
+  const activity = activitySummary(orders, WINDOW_DAYS);
   const insights = buildInsights({
     items,
     days: byDay,
     hours: byHour,
     menuItemNames: menuItems.map((i) => i.name),
     windowDays: WINDOW_DAYS,
+    ...activity,
   });
 
   const hasData = events.length > 0;
 
   return (
     <div>
-      <h1 className="text-2xl font-bold tracking-tight">Analysis</h1>
-      <p className="mt-1.5 max-w-xl text-[15px] text-muted-foreground">
-        How {restaurant.name} is really doing — revenue trends, what sells, and
-        what to do about it.
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Analysis</h1>
+          <p className="mt-1.5 max-w-xl text-[15px] text-muted-foreground">
+            How {restaurant.name} is really doing — revenue trends, what sells,
+            and what to do about it.
+          </p>
+        </div>
+        {hasData && (
+          <div className="flex flex-wrap gap-2">
+            <DownloadLink href="/api/export/orders" label="Orders CSV" />
+            <DownloadLink
+              href="/api/export/analytics?report=daily"
+              label="Daily CSV"
+            />
+            <DownloadLink
+              href="/api/export/analytics?report=items"
+              label="Items CSV"
+            />
+          </div>
+        )}
+      </div>
 
       {!hasData ? (
         <div className="mt-8 rounded-2xl border border-dashed border-border bg-muted/30 px-6 py-14 text-center">
@@ -150,13 +177,28 @@ export default async function AnalysisPage() {
             </div>
           </section>
 
-          <p className="mt-4 text-[12px] text-muted-foreground">
-            Includes sample history generated for demonstration — live orders
-            fold into these numbers as they&apos;re served.
-          </p>
+          {restaurant.demo && (
+            <p className="mt-4 text-[12px] text-muted-foreground">
+              Includes sample history generated for demonstration — live orders
+              fold into these numbers as they&apos;re served.
+            </p>
+          )}
         </>
       )}
     </div>
+  );
+}
+
+function DownloadLink({ href, label }: { href: string; label: string }) {
+  // Plain anchors so the browser downloads the streamed CSV directly; the
+  // route enforces the staff session.
+  return (
+    <a
+      href={href}
+      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-[13px] font-medium transition-colors hover:bg-muted/60"
+    >
+      <Download className="size-3.5" /> {label}
+    </a>
   );
 }
 
@@ -169,8 +211,14 @@ function InsightCard({ insight }: { insight: Insight }) {
     ) : (
       <Lightbulb className="size-4" />
     );
+  const muted = insight.confidence === "low";
   return (
-    <div className="flex gap-3 rounded-2xl border border-border bg-card p-4">
+    <div
+      className={cn(
+        "flex gap-3 rounded-2xl border border-border bg-card p-4",
+        muted && "opacity-75",
+      )}
+    >
       <span
         className={cn(
           "mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg",
@@ -186,6 +234,11 @@ function InsightCard({ insight }: { insight: Insight }) {
         <p className="mt-0.5 text-[13px] leading-relaxed text-muted-foreground">
           {insight.detail}
         </p>
+        {muted && (
+          <p className="mt-1 text-[11px] italic text-muted-foreground">
+            Based on limited data — treat as an early signal.
+          </p>
+        )}
       </div>
     </div>
   );

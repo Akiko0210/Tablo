@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { getSession } from "@/lib/auth/current";
 import {
   findAccountById,
@@ -32,22 +32,23 @@ export async function PATCH(request: Request) {
     );
   }
 
-  if (!findAccountById(session.userId)) {
+  if (!(await findAccountById(session.userId))) {
     return NextResponse.json(
       { error: "This account can't be updated." },
       { status: 404 },
     );
   }
 
-  const account = updateAccountProfile(session.userId, parsed.data);
+  const account = await updateAccountProfile(session.userId, parsed.data);
   if (!account) {
     return NextResponse.json({ error: "Account not found" }, { status: 404 });
   }
 
   // Onboarding is complete — analyze the uploaded menu photos with Claude in
   // the background so the items are (usually) ready by the time the owner
-  // opens the Menu section. Fire-and-forget; the job records its own status.
-  void runMenuGeneration(account.id, account.restaurantId);
+  // opens the Menu section. after() keeps the work alive past the response on
+  // serverless; the job records its own status.
+  after(() => runMenuGeneration(account.id, account.restaurantId));
 
   return NextResponse.json({ account: toSafeAccount(account) });
 }

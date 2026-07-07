@@ -5,9 +5,19 @@ import {
   signSession,
   sessionCookieOptions,
 } from "@/lib/auth/session";
+import { clientIp, limit } from "@/lib/rate-limit";
 
 // POST /api/auth/login — verify credentials and set the session cookie.
+// Rate-limited per IP against credential stuffing.
 export async function POST(request: Request) {
+  const rate = await limit(`login:${clientIp(request)}`, 10, 60_000);
+  if (!rate.allowed) {
+    return NextResponse.json(
+      { error: "Too many attempts — wait a minute and try again." },
+      { status: 429, headers: { "Retry-After": String(rate.retryAfter) } },
+    );
+  }
+
   let body: unknown;
   try {
     body = await request.json();

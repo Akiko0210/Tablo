@@ -1,9 +1,11 @@
 "use client";
 
-import { RefreshCw, Inbox, AlertCircle } from "lucide-react";
+import { RefreshCw, Inbox, AlertCircle, Download } from "lucide-react";
 import { ORDER_STATUSES } from "@/lib/orders/types";
+import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ButtonLink } from "@/components/ui/button-link";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useOrders } from "./use-orders";
 import { OrderCard } from "./order-card";
@@ -11,6 +13,7 @@ import { statusMeta } from "./order-status";
 
 export function OrdersBoard() {
   const { orders, loading, error, refresh, updateStatus } = useOrders();
+  const now = useNow();
 
   return (
     <div className="flex min-h-full flex-col">
@@ -21,10 +24,15 @@ export function OrdersBoard() {
             Live orders from every table. Updates automatically.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={refresh}>
-          <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <ButtonLink href="/api/export/orders" variant="outline" size="sm">
+            <Download className="size-3.5" /> Export CSV
+          </ButtonLink>
+          <Button variant="outline" size="sm" onClick={refresh}>
+            <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -67,6 +75,7 @@ export function OrdersBoard() {
                         key={order.id}
                         order={order}
                         onAdvance={updateStatus}
+                        now={now}
                       />
                     ))
                   )}

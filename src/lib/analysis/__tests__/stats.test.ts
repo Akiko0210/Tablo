@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Order } from "@/lib/orders/types";
 import {
+  activitySummary,
   itemPerformance,
   ordersByHour,
   periodSummary,
@@ -29,7 +30,7 @@ function order(
     id: `t-${seq}`,
     restaurantId: "r",
     table: "1",
-    lines: lines.map((l) => ({ ...l, addonLabels: [] })),
+    lines: lines.map((l) => ({ ...l, optionLabels: [] })),
     subtotal,
     status,
     createdAt: created.toISOString(),
@@ -108,6 +109,16 @@ describe("itemPerformance", () => {
     );
     expect(item.trendPct).toBeNull();
   });
+
+  it("counts distinct sale days, not orders", () => {
+    const orders = [
+      order(2, 10, [{ name: "Ragù", quantity: 1, unitPrice: 10 }]),
+      order(2, 10, [{ name: "Ragù", quantity: 1, unitPrice: 10 }]), // same day
+      order(5, 10, [{ name: "Ragù", quantity: 1, unitPrice: 10 }]),
+    ];
+    const [ragu] = itemPerformance(orders, 28, NOW);
+    expect(ragu.distinctDays).toBe(2);
+  });
 });
 
 describe("periodSummary", () => {
@@ -121,8 +132,49 @@ describe("periodSummary", () => {
     expect(summary.ordersTrendPct).toBe(100);
   });
 
+  it("computes items per order and its trend", () => {
+    const orders = [
+      // Current week: 2 orders, 5 items → 2.5 items/order
+      order(1, 30, [{ name: "A", quantity: 3, unitPrice: 10 }]),
+      order(2, 20, [{ name: "B", quantity: 2, unitPrice: 10 }]),
+      // Previous week: 1 order, 1 item → 1 item/order
+      order(10, 10, [{ name: "A", quantity: 1, unitPrice: 10 }]),
+    ];
+    const summary = periodSummary(orders, 7, NOW);
+    expect(summary.items).toBe(5);
+    expect(summary.itemsPerOrder).toBe(2.5);
+    expect(summary.itemsPerOrderTrendPct).toBe(150);
+    expect(summary.avgOrderTrendPct).toBe(150); // 25 avg vs 10 avg
+  });
+
   it("returns null trends with no baseline", () => {
     const summary = periodSummary([order(1, 50)], 7, NOW);
     expect(summary.revenueTrendPct).toBeNull();
+    expect(summary.avgOrderTrendPct).toBeNull();
+    expect(summary.itemsPerOrderTrendPct).toBeNull();
+  });
+});
+
+describe("activitySummary", () => {
+  it("counts window orders, previous-window orders, and active days", () => {
+    const orders = [
+      order(1, 10), // Tue
+      order(1, 10), // Tue (same day)
+      order(3, 10), // Sun — weekend
+      order(4, 10), // Sat — weekend
+      order(40, 10), // previous window
+      order(999, 10), // outside both windows
+    ];
+    const activity = activitySummary(orders, 28, NOW);
+    expect(activity.totalOrders).toBe(4);
+    expect(activity.prevTotalOrders).toBe(1);
+    expect(activity.activeDays).toBe(3);
+    expect(activity.activeWeekendDays).toBe(2);
+  });
+
+  it("ignores non-served orders", () => {
+    const activity = activitySummary([order(1, 10, undefined, "new")], 28, NOW);
+    expect(activity.totalOrders).toBe(0);
+    expect(activity.activeDays).toBe(0);
   });
 });

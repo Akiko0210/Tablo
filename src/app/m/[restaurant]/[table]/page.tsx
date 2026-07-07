@@ -15,7 +15,7 @@ export async function generateMetadata({
   params: Promise<Params>;
 }): Promise<Metadata> {
   const { restaurant } = await params;
-  const guest = guestRestaurantForSlug(decodeURIComponent(restaurant));
+  const guest = await guestRestaurantForSlug(decodeURIComponent(restaurant));
   if (!guest) return { title: "Menu — Tablo" };
   return {
     title: `${guest.name} — Menu`,
@@ -29,7 +29,7 @@ export default async function TableMenuPage({
   params: Promise<Params>;
 }) {
   const { restaurant, table } = await params;
-  const guest = guestRestaurantForSlug(decodeURIComponent(restaurant));
+  const guest = await guestRestaurantForSlug(decodeURIComponent(restaurant));
   if (!guest) notFound();
   return <MenuApp tableId={decodeURIComponent(table)} restaurant={guest} />;
 }

@@ -105,7 +105,7 @@ export function generateHistory(
           name: item.name,
           quantity,
           unitPrice: item.price,
-          addonLabels: [],
+          optionLabels: [],
         });
         subtotal += item.price * quantity;
       }

@@ -13,10 +13,11 @@ export const ORDER_STATUSES: OrderStatus[] = [
 export interface OrderLine {
   name: string;
   quantity: number;
-  /** Unit price including size + add-ons (before quantity). */
+  /** Unit price including selected options (before quantity). */
   unitPrice: number;
-  sizeLabel?: string;
-  addonLabels: string[];
+  /** Selected option labels, denormalized so history survives menu edits.
+   * Old orders' `sizeLabel`/`addonLabels` are folded in here on read. */
+  optionLabels: string[];
   note?: string;
 }
 
@@ -37,8 +38,25 @@ export interface Order {
   seeded?: boolean;
 }
 
+/** One line of the untrusted payload the guest menu POSTs: item + selected
+ * option ids only. The server resolves names and recomputes all prices. */
+export interface NewOrderRequestLine {
+  itemId: string;
+  quantity: number;
+  optionIds: string[];
+  note?: string;
+}
+
 /** Shape the guest menu POSTs to create an order (restaurant resolved from the
- * URL slug server-side, never trusted from the body). */
+ * URL slug server-side; prices never trusted from the body). */
+export interface NewOrderRequest {
+  table: string;
+  lines: NewOrderRequestLine[];
+  kitchenNote?: string;
+}
+
+/** Fully priced order input the store persists — produced server-side by
+ * priceOrder(), never taken from the client. */
 export interface NewOrderInput {
   table: string;
   lines: OrderLine[];

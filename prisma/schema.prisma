@@ -1,0 +1,274 @@
+// Tablo production schema. Every tenant-scoped table carries restaurantId —
+// the tenancy root is Restaurant, owned by exactly one Account.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                 String    @id
+  name               String
+  initials           String
+  email              String    @unique
+  passwordHash       String
+  role               String    @default("Owner")
+  onboardingComplete Boolean   @default(false)
+  emailVerifiedAt    DateTime?
+  // Onboarding profile (mirrored onto the restaurant record on save).
+  cuisine            String?
+  tagline            String?
+  address            String?
+  phone              String?
+  tableCount         Int?
+  description        String?
+  createdAt          DateTime  @default(now())
+
+  restaurant Restaurant?
+  sessions   Session[]
+  tokens     VerificationToken[]
+  uploads    Upload[]
+}
+
+model Restaurant {
+  id          String  @id
+  slug        String  @unique
+  name        String
+  initials    String
+  tagline     String
+  cuisine     String?
+  currency    String  @default("USD")
+  tableCount  Int     @default(12)
+  kitchenCode String  @unique
+  address     String?
+  phone       String?
+  description String?
+  demo        Boolean @default(false)
+  /// Per-restaurant counter behind order displayIds ("ord-0042").
+  orderSeq    Int     @default(0)
+  /// Set once synthetic analysis history has been generated (demo only).
+  historySeededAt DateTime?
+  createdAt   DateTime @default(now())
+
+  ownerUserId String  @unique
+  owner       Account @relation(fields: [ownerUserId], references: [id])
+
+  menuItems     MenuItem[]
+  orders        Order[]
+  workers       Worker[]
+  timeEntries   TimeEntry[]
+  generationJob GenerationJob?
+}
+
+enum MenuItemSource {
+  seed
+  ai
+  manual
+}
+
+model MenuItem {
+  id           String         @id
+  restaurantId String
+  restaurant   Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  name         String
+  description  String
+  /// Base price in major units of the restaurant currency.
+  price        Decimal        @db.Decimal(10, 2)
+  categoryId   String
+  tags         String[]
+  emoji        String?
+  imageUrl     String?
+  soldOut      Boolean        @default(false)
+  popular      Boolean        @default(false)
+  source       MenuItemSource
+  sortIndex    Int            @default(0)
+  createdAt    DateTime       @default(now())
+
+  modifierGroups ModifierGroup[]
+
+  @@index([restaurantId])
+}
+
+model ModifierGroup {
+  id         String   @id
+  menuItemId String
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  label      String
+  minSelect  Int      @default(0)
+  maxSelect  Int      @default(1)
+  required   Boolean  @default(false)
+  sortIndex  Int      @default(0)
+
+  options ModifierOption[]
+
+  @@index([menuItemId])
+}
+
+model ModifierOption {
+  id         String        @id
+  groupId    String
+  group      ModifierGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  label      String
+  /// Added to the item's base price when selected. 0 = included.
+  priceDelta Decimal       @db.Decimal(10, 2) @default(0)
+  note       String?
+  sortIndex  Int           @default(0)
+
+  @@index([groupId])
+}
+
+enum OrderStatus {
+  new
+  preparing
+  ready
+  served
+}
+
+model Order {
+  id           String      @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  /// Guest/kitchen-facing id, unique per restaurant (e.g. "ord-1003").
+  displayId    String
+  table        String
+  subtotal     Decimal     @db.Decimal(10, 2)
+  kitchenNote  String?
+  status       OrderStatus @default(new)
+  /// Synthetic analysis history — excluded from the live boards.
+  seeded       Boolean     @default(false)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  lines OrderLine[]
+
+  @@unique([restaurantId, displayId])
+  @@index([restaurantId, createdAt])
+  @@index([restaurantId, updatedAt])
+}
+
+model OrderLine {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  // Denormalized on purpose: order history must survive menu edits/deletes.
+  name         String
+  quantity     Int
+  unitPrice    Decimal  @db.Decimal(10, 2)
+  /// Selected modifier-option labels. New lines write here only.
+  optionLabels String[] @default([])
+  /// Legacy pre-modifier-group columns — read-only, kept so old orders render.
+  sizeLabel    String?
+  addonLabels  String[]
+  note         String?
+  sortIndex    Int      @default(0)
+
+  @@index([orderId])
+}
+
+model Worker {
+  id           String     @id
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  name         String
+  role         String
+  phone        String?
+  email        String?
+  /// scrypt hash of the 4-digit clock-in PIN (same format as passwords).
+  /// PINs are unique per restaurant so the kitchen app can resolve a worker
+  /// from the PIN alone — enforced in the store (salted hashes can't be
+  /// unique-indexed).
+  pinHash      String
+  createdAt    DateTime   @default(now())
+
+  entries TimeEntry[]
+
+  @@index([restaurantId])
+}
+
+model TimeEntry {
+  id           String     @id
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  // Nullable so a deleted worker's shifts stay on the books (labor records).
+  workerId     String?
+  worker       Worker?    @relation(fields: [workerId], references: [id], onDelete: SetNull)
+  clockIn      DateTime
+  clockOut     DateTime?
+
+  @@index([restaurantId, workerId])
+}
+
+model Upload {
+  id        String   @id
+  ownerId   String
+  owner     Account @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  kind      String
+  mime      String
+  filename  String
+  /// Object key in R2 when object storage is configured…
+  storageKey String?
+  /// …otherwise the bytes live here (zero-config dev fallback).
+  data      Bytes?
+  createdAt DateTime @default(now())
+
+  @@index([ownerId, kind])
+}
+
+enum GenerationStatus {
+  idle
+  running
+  done
+  failed
+  skipped
+}
+
+model GenerationJob {
+  restaurantId String           @id
+  restaurant   Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  status       GenerationStatus
+  message      String?
+  itemCount    Int?
+  updatedAt    DateTime         @updatedAt
+}
+
+// ---- Phase 2/3 infrastructure (declared now to avoid schema churn) ----
+
+model Session {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  accountId String
+  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([accountId])
+}
+
+enum TokenKind {
+  email_verify
+  password_reset
+}
+
+model VerificationToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  accountId String
+  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  kind      TokenKind
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([accountId, kind])
+}
+
+model RateLimit {
+  key         String   @id
+  count       Int      @default(0)
+  windowStart DateTime
+}

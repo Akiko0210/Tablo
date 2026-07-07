@@ -29,7 +29,7 @@ export async function PATCH(
     );
   }
 
-  const item = updateMenuItem(ctx.restaurant.id, id, parsed.data);
+  const item = await updateMenuItem(ctx.restaurant.id, id, parsed.data);
   if (!item) {
     return NextResponse.json({ error: "Item not found" }, { status: 404 });
   }
@@ -46,7 +46,7 @@ export async function DELETE(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const { id } = await params;
-  const ok = deleteMenuItem(ctx.restaurant.id, id);
+  const ok = await deleteMenuItem(ctx.restaurant.id, id);
   if (!ok) {
     return NextResponse.json({ error: "Item not found" }, { status: 404 });
   }

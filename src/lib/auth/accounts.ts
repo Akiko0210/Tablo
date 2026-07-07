@@ -1,8 +1,10 @@
-// In-memory store for accounts created through /signup. Separate from the
-// seeded demo user in users.ts. Attached to globalThis so it survives dev
-// HMR module reloads — same pattern as src/lib/orders/store.ts.
+// Restaurant owner accounts, backed by Postgres via Prisma. The onboarding
+// profile lives as flattened columns on Account and is mirrored onto the owned
+// restaurant record when saved.
 
 import crypto from "node:crypto";
+import type { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/db";
 import { createRestaurant, updateRestaurant } from "@/lib/restaurants/store";
 import { hashPassword } from "./password";
 import { initialsFrom } from "./initials";
@@ -28,6 +30,7 @@ export interface RestaurantAccount {
   role: string;
   profile: RestaurantProfile;
   onboardingComplete: boolean;
+  emailVerified: boolean;
   createdAt: string;
 }
 
@@ -39,28 +42,57 @@ export function toSafeAccount(account: RestaurantAccount): SafeAccount {
   return safe;
 }
 
-interface AccountStore {
-  accounts: RestaurantAccount[];
-}
+type AccountWithRestaurant = Prisma.AccountGetPayload<{
+  include: { restaurant: { select: { id: true; name: true } } };
+}>;
 
-const globalForAccounts = globalThis as unknown as {
-  __tabloAccountStore?: AccountStore;
+const accountInclude = {
+  restaurant: { select: { id: true as const, name: true as const } },
 };
 
-function getStore(): AccountStore {
-  if (!globalForAccounts.__tabloAccountStore) {
-    globalForAccounts.__tabloAccountStore = { accounts: [] };
-  }
-  return globalForAccounts.__tabloAccountStore;
+function toAccount(row: AccountWithRestaurant): RestaurantAccount {
+  return {
+    id: row.id,
+    name: row.name,
+    initials: row.initials,
+    email: row.email,
+    passwordHash: row.passwordHash,
+    restaurantName: row.restaurant?.name ?? "",
+    restaurantId: row.restaurant?.id ?? "",
+    role: row.role,
+    profile: {
+      cuisine: row.cuisine ?? undefined,
+      tagline: row.tagline ?? undefined,
+      address: row.address ?? undefined,
+      phone: row.phone ?? undefined,
+      tableCount: row.tableCount ?? undefined,
+      description: row.description ?? undefined,
+    },
+    onboardingComplete: row.onboardingComplete,
+    emailVerified: row.emailVerifiedAt !== null,
+    createdAt: row.createdAt.toISOString(),
+  };
 }
 
-export function findAccountByEmail(email: string): RestaurantAccount | undefined {
+export async function findAccountByEmail(
+  email: string,
+): Promise<RestaurantAccount | undefined> {
   const normalized = email.trim().toLowerCase();
-  return getStore().accounts.find((a) => a.email === normalized);
+  const row = await prisma.account.findUnique({
+    where: { email: normalized },
+    include: accountInclude,
+  });
+  return row ? toAccount(row) : undefined;
 }
 
-export function findAccountById(id: string): RestaurantAccount | undefined {
-  return getStore().accounts.find((a) => a.id === id);
+export async function findAccountById(
+  id: string,
+): Promise<RestaurantAccount | undefined> {
+  const row = await prisma.account.findUnique({
+    where: { id },
+    include: accountInclude,
+  });
+  return row ? toAccount(row) : undefined;
 }
 
 export interface CreateAccountInput {
@@ -75,38 +107,40 @@ export async function createAccount(
 ): Promise<RestaurantAccount> {
   const passwordHash = await hashPassword(input.password);
   const id = `acct_${crypto.randomUUID()}`;
-  const restaurant = createRestaurant({
-    name: input.restaurantName,
-    ownerUserId: id,
+  await prisma.account.create({
+    data: {
+      id,
+      name: input.name.trim(),
+      initials: initialsFrom(input.name),
+      email: input.email.trim().toLowerCase(),
+      passwordHash,
+      role: "Owner",
+    },
   });
-  const account: RestaurantAccount = {
-    id,
-    name: input.name.trim(),
-    initials: initialsFrom(input.name),
-    email: input.email.trim().toLowerCase(),
-    passwordHash,
-    restaurantName: restaurant.name,
-    restaurantId: restaurant.id,
-    role: "Owner",
-    profile: {},
-    onboardingComplete: false,
-    createdAt: new Date().toISOString(),
-  };
-  getStore().accounts.push(account);
+  await createRestaurant({ name: input.restaurantName, ownerUserId: id });
+  const account = await findAccountById(id);
+  if (!account) throw new Error("Account creation failed");
   return account;
 }
 
 /** Merges the given fields into the account's profile, mirrors them onto the
  * owned restaurant record, and marks onboarding done. */
-export function updateAccountProfile(
+export async function updateAccountProfile(
   id: string,
   profile: RestaurantProfile,
-): RestaurantAccount | undefined {
-  const account = findAccountById(id);
+): Promise<RestaurantAccount | undefined> {
+  const account = await findAccountById(id);
   if (!account) return undefined;
-  account.profile = { ...account.profile, ...profile };
-  account.onboardingComplete = true;
-  updateRestaurant(account.restaurantId, {
+  const data: Record<string, unknown> = { onboardingComplete: true };
+  if (profile.cuisine !== undefined) data.cuisine = profile.cuisine || null;
+  if (profile.tagline !== undefined) data.tagline = profile.tagline || null;
+  if (profile.address !== undefined) data.address = profile.address || null;
+  if (profile.phone !== undefined) data.phone = profile.phone || null;
+  if (profile.tableCount !== undefined) data.tableCount = profile.tableCount;
+  if (profile.description !== undefined)
+    data.description = profile.description || null;
+  await prisma.account.update({ where: { id }, data });
+  await updateRestaurant(account.restaurantId, {
     tagline: profile.tagline,
     cuisine: profile.cuisine,
     tableCount: profile.tableCount,
@@ -114,5 +148,5 @@ export function updateAccountProfile(
     phone: profile.phone,
     description: profile.description,
   });
-  return account;
+  return findAccountById(id);
 }
