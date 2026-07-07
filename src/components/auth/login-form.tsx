@@ -92,11 +92,6 @@ export function LoginForm() {
         )}
       </Button>
 
-      <p className="rounded-lg bg-muted px-3 py-2 text-center text-[12px] text-muted-foreground">
-        Demo account · <span className="font-medium">sofia@bella.com</span> /{" "}
-        <span className="font-medium">tablo123</span>
-      </p>
-
       <p className="text-center text-[13px] text-muted-foreground">
         New restaurant?{" "}
         <Link href="/signup" className="font-medium text-foreground underline">
