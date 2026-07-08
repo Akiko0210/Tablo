@@ -10,7 +10,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { getStaffContext } from "@/lib/auth/current";
-import { listAllOrdersForAnalysis } from "@/lib/orders/store";
+import { listOrdersSince, listSalesEvents } from "@/lib/orders/store";
 import { listMenuItems } from "@/lib/menu/store";
 import { ensureAnalysisHistory } from "@/lib/analysis/ensure-history";
 import {
@@ -20,7 +20,6 @@ import {
   revenueByDayOfWeek,
 } from "@/lib/analysis/stats";
 import { buildInsights, type Insight } from "@/lib/analysis/insights";
-import type { SalesEvent } from "@/lib/analysis/series";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { RevenueExplorer } from "@/components/dashboard/revenue-explorer";
@@ -46,20 +45,15 @@ export default async function AnalysisPage() {
   // eslint-disable-next-line react-hooks/purity
   const nowMs = Date.now();
 
-  const [orders, menuItems] = await Promise.all([
-    listAllOrdersForAnalysis(restaurant.id),
+  // Stats compare the current window to the preceding one, so fetch orders
+  // (with lines) for both; the explorer's all-time series comes from a
+  // lightweight aggregate (one row per served order) instead of full orders.
+  const statsSince = new Date(nowMs - 2 * WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const [events, orders, menuItems] = await Promise.all([
+    listSalesEvents(restaurant.id),
+    listOrdersSince(restaurant.id, statsSince),
     listMenuItems(restaurant.id),
   ]);
-
-  // Compact event list (served sales only) for the client-side explorer, which
-  // buckets it into whatever period/granularity the owner navigates to.
-  const events: SalesEvent[] = orders
-    .filter((o) => o.status === "served")
-    .map((o) => ({
-      t: new Date(o.createdAt).getTime(),
-      revenue: o.subtotal,
-      items: o.lines.reduce((n, l) => n + l.quantity, 0),
-    }));
 
   const byDay = revenueByDayOfWeek(orders, WINDOW_DAYS);
   const byHour = ordersByHour(orders, WINDOW_DAYS);

@@ -47,12 +47,46 @@ export async function listOrders(restaurantId: string): Promise<Order[]> {
   return rows.map(toOrder);
 }
 
-/** Every order for a restaurant including synthetic history — analysis only. */
-export async function listAllOrdersForAnalysis(
+/** One completed sale, reduced to what the analysis explorer charts need. */
+export interface SaleEventRow {
+  /** epoch ms */
+  t: number;
+  revenue: number;
+  /** Units across the order's lines. */
+  items: number;
+}
+
+/** All served sales (incl. synthetic history) as lightweight events — one
+ * aggregated row per order instead of full orders with joined lines. The
+ * demo restaurant has thousands of seeded orders; shipping them with lines
+ * attached made the Analysis page take seconds. */
+export async function listSalesEvents(
   restaurantId: string,
+): Promise<SaleEventRow[]> {
+  const rows = await prisma.$queryRaw<
+    { createdAt: Date; subtotal: unknown; items: bigint | number }[]
+  >`
+    SELECT o."createdAt", o."subtotal", COALESCE(SUM(l."quantity"), 0) AS items
+    FROM "Order" o
+    LEFT JOIN "OrderLine" l ON l."orderId" = o."id"
+    WHERE o."restaurantId" = ${restaurantId} AND o."status" = 'served'
+    GROUP BY o."id"
+  `;
+  return rows.map((r) => ({
+    t: r.createdAt.getTime(),
+    revenue: Number(r.subtotal),
+    items: Number(r.items),
+  }));
+}
+
+/** Orders (with lines) created since `since` — the bounded window the
+ * per-item stats and insights need, instead of the whole history. */
+export async function listOrdersSince(
+  restaurantId: string,
+  since: Date,
 ): Promise<Order[]> {
   const rows = await prisma.order.findMany({
-    where: { restaurantId },
+    where: { restaurantId, createdAt: { gte: since } },
     include: orderInclude,
   });
   return rows.map(toOrder);

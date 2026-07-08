@@ -5,13 +5,19 @@ import type { Order, OrderStatus } from "@/lib/orders/types";
 
 const POLL_INTERVAL = 4000;
 
+// Last known orders, shared across mounts. Switching dashboard tabs unmounts
+// and remounts the consumers; without this every switch showed skeletons while
+// the same data refetched. With it, revisits render instantly from the cache
+// and the poll refreshes in the background.
+let cachedOrders: Order[] | null = null;
+
 /**
  * Polls the orders API so the dashboard reflects new guest orders live.
  * On a 401 (expired session) it sends the user back to login.
  */
 export function useOrders() {
-  const [orders, setOrders] = React.useState<Order[]>([]);
-  const [loading, setLoading] = React.useState(true);
+  const [orders, setOrders] = React.useState<Order[]>(() => cachedOrders ?? []);
+  const [loading, setLoading] = React.useState(cachedOrders === null);
   const [error, setError] = React.useState(false);
 
   const load = React.useCallback(async () => {
@@ -23,6 +29,7 @@ export function useOrders() {
       }
       if (!res.ok) throw new Error(`Request failed: ${res.status}`);
       const data = (await res.json()) as { orders: Order[] };
+      cachedOrders = data.orders;
       setOrders(data.orders);
       setError(false);
     } catch {
@@ -45,9 +52,11 @@ export function useOrders() {
   const updateStatus = React.useCallback(
     async (id: string, status: OrderStatus) => {
       // Optimistic update, then reconcile with the server.
-      setOrders((prev) =>
-        prev.map((o) => (o.id === id ? { ...o, status } : o)),
-      );
+      setOrders((prev) => {
+        const next = prev.map((o) => (o.id === id ? { ...o, status } : o));
+        cachedOrders = next;
+        return next;
+      });
       try {
         const res = await fetch(`/api/orders/${id}`, {
           method: "PATCH",

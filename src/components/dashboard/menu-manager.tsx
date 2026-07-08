@@ -47,8 +47,13 @@ interface EditorState {
   item: MenuItemRecord | null;
 }
 
+// Last fetched menu, shared across mounts so switching back to this tab
+// renders instantly instead of re-showing skeletons (a fresh fetch still
+// runs in the background on every mount).
+let cachedMenu: MenuPayload | null = null;
+
 export function MenuManager() {
-  const [data, setData] = React.useState<MenuPayload | null>(null);
+  const [data, setData] = React.useState<MenuPayload | null>(cachedMenu);
   const [editor, setEditor] = React.useState<EditorState>({
     open: false,
     item: null,
@@ -58,7 +63,9 @@ export function MenuManager() {
     try {
       const res = await fetch("/api/menu");
       if (!res.ok) return;
-      setData(await res.json());
+      const payload = (await res.json()) as MenuPayload;
+      cachedMenu = payload;
+      setData(payload);
     } catch {
       // Network hiccup — the next poll retries.
     }
